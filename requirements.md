@@ -6,6 +6,13 @@
 - Support both solo and group play.
 - Support both PvE (players vs enemies) and PvP (players vs players).
 
+## 1.1 Sprint Summary (Quick View)
+- Sprint 1 does: Setup project, run local server, and add login + master passcode flow.
+- Sprint 2 does: Build section loading (300 feet), enemies, combat, and XP/gold rewards.
+- Sprint 3 does: Add Hydra/Cyclops bosses, respawn logic, and in-map group joining.
+- Sprint 4 does: Build main page, Start Game button, bug reports, and News page/admin news posts.
+- Sprint 5 does: Add admin tools (kick/ban), rate limits, logs, and device input testing.
+
 ## 2. Core Technology
 - Server language: TypeScript.
 - Game client: C# using Godot.
@@ -107,7 +114,42 @@
   - News feed visibility into player report time and reason.
   - Basic auth, moderation, and admin tooling.
 
-## 13. Future Enhancements (Post-Launch)
+## 13. Simple Sprint Plan
+- Sprint 1: Project Setup and Server Start
+  - Set up Node.js, TypeScript server project, and basic folder structure.
+  - Start server locally and confirm it runs without errors.
+  - Add basic account login flow with master passcode check.
+  - Success check: Two test users can log in and reach the main page.
+
+- Sprint 2: Core World and Combat Loop
+  - Implement section loading using the 300 feet activation rule.
+  - Add enemy entities in active sections.
+  - Add combat basics with server-side validation.
+  - Add XP and gold rewards from enemy kills.
+  - Success check: Player can enter world, kill enemies, and gain XP/gold.
+
+- Sprint 3: Bosses and Group Play
+  - Add Hydra Lake and Cyclops Cave structures.
+  - Add Hydra and Cave Cyclops boss encounters.
+  - Add automatic boss respawn cooldown and hidden-button respawn.
+  - Add in-map group joining.
+  - Success check: Group can defeat a boss and receive rewards.
+
+- Sprint 4: Main Page, News, and Reports
+  - Add Start Game button on main page.
+  - Add player bug report option from main page.
+  - Add News page with admin posting.
+  - Show player report time and reason in the news feed.
+  - Success check: Admin can post news and players can view/report correctly.
+
+- Sprint 5: Safety, Admin Controls, and Device Testing
+  - Add admin role checks, kick, and ban/unban tools.
+  - Add login/passcode rate limits.
+  - Add moderation logs for bans, kicks, reports, and login failures.
+  - Test touch controls (iPad/iPhone) and keyboard controls (Windows/macOS).
+  - Success check: Non-admin cannot use admin actions and all target devices can connect.
+
+## 14. Future Enhancements (Post-Launch)
 - Additional bosses and boss structures.
 - Advanced anti-cheat heuristics.
 - Better analytics dashboards for admin logs.
