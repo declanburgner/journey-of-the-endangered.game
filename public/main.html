@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Main Page - Sprint 1</title>
+    <title>Main Page - Sprint 2</title>
     <style>
       body {
         font-family: sans-serif;
@@ -24,15 +24,17 @@
     </style>
   </head>
   <body>
-    <h1>Main Page</h1>
+    <h1>Main Page - Sprint 2</h1>
     <p>You are here only after correct passcodes and login.</p>
-    <button>Start Game</button>
-    <button>News</button>
+    <button id="startGameBtn">Start Game</button>
+    <button id="newsBtn">News</button>
     <div id="status"></div>
 
     <script>
       const statusEl = document.getElementById("status");
       const token = localStorage.getItem("token");
+      const startGameBtn = document.getElementById("startGameBtn");
+      const newsBtn = document.getElementById("newsBtn");
 
       if (!token) {
         statusEl.textContent = "Not logged in. Redirecting...";
@@ -52,6 +54,37 @@
             statusEl.textContent = `Access denied: ${error.message}`;
             setTimeout(() => (window.location.href = "/"), 1000);
           });
+
+        startGameBtn.addEventListener("click", async () => {
+          startGameBtn.disabled = true;
+          statusEl.textContent = "Joining world...";
+
+          try {
+            const response = await fetch("/api/world/join", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`
+              },
+              body: JSON.stringify({ x: 0, y: 0 })
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+              throw new Error(data.error || "Failed to join world");
+            }
+
+            localStorage.setItem("lastWorldState", JSON.stringify(data));
+            window.location.href = "/game.html";
+          } catch (error) {
+            statusEl.textContent = `Start Game failed: ${error.message}`;
+            startGameBtn.disabled = false;
+          }
+        });
+
+        newsBtn.addEventListener("click", () => {
+          statusEl.textContent = "News page is planned for Sprint 4.";
+        });
       }
     </script>
   </body>

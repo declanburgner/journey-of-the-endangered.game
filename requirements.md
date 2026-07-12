@@ -4,6 +4,8 @@
 - Build a first-person multiplayer game server using TypeScript.
 - Support small-group to medium sessions suitable for family and trusted friends.
 - Support both solo and group play.
+- Support 1-25 concurrent players.
+- Players can join active sessions at any time (no lobby wait required).
 - Support both PvE (players vs enemies) and PvP (players vs players).
 
 ## 1.1 Sprint Summary (Quick View)
@@ -128,6 +130,7 @@
   - Add enemy entities in active sections.
   - Add combat basics with server-side validation.
   - Add XP and gold rewards from enemy kills.
+  - Enforce 1-25 concurrent players and allow join-anytime behavior.
   - Success check: Player can enter world, kill enemies, and gain XP/gold.
 
 - Sprint 3: Bosses and Group Play

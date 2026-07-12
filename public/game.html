@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Game - Sprint 2</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        max-width: 760px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        background: #0a1f44;
+        color: #f0f6ff;
+      }
+      button {
+        padding: 0.6rem 1rem;
+        margin-right: 0.5rem;
+        background: #1f4fa3;
+        border: 1px solid #4b74bf;
+        color: #f0f6ff;
+      }
+      pre {
+        margin-top: 1rem;
+        padding: 0.75rem;
+        white-space: pre-wrap;
+        background: #16305f;
+        border: 1px solid #2f4f87;
+      }
+      #status {
+        margin-top: 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Sprint 2 World</h1>
+    <p>This page confirms Start Game joined the world.</p>
+
+    <button id="refreshBtn">Refresh World State</button>
+    <button id="backBtn">Back to Main Page</button>
+    <div id="status"></div>
+    <pre id="worldView"></pre>
+
+    <script>
+      const statusEl = document.getElementById("status");
+      const worldViewEl = document.getElementById("worldView");
+      const token = localStorage.getItem("token");
+
+      if (!token) {
+        statusEl.textContent = "Not logged in. Redirecting...";
+        setTimeout(() => (window.location.href = "/"), 700);
+      }
+
+      async function refreshWorld() {
+        statusEl.textContent = "Loading world state...";
+
+        try {
+          const response = await fetch("/api/world/state", {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.error || "Failed to load world state");
+          }
+
+          worldViewEl.textContent = JSON.stringify(data, null, 2);
+          statusEl.textContent = `Player ${data.player.username} at (${data.player.x}, ${data.player.y}) | XP ${data.player.xp} | Gold ${data.player.gold}`;
+        } catch (error) {
+          statusEl.textContent = `World load failed: ${error.message}`;
+        }
+      }
+
+      const cachedWorld = localStorage.getItem("lastWorldState");
+      if (cachedWorld) {
+        worldViewEl.textContent = cachedWorld;
+      }
+
+      document.getElementById("refreshBtn").addEventListener("click", refreshWorld);
+      document.getElementById("backBtn").addEventListener("click", () => {
+        window.location.href = "/main.html";
+      });
+
+      refreshWorld();
+    </script>
+  </body>
+</html>
