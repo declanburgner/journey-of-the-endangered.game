@@ -29,9 +29,10 @@ type PlayerState = {
   y: number;
   health: number;
   equippedTool: ToolId | null;
-  inventorySlots: Array<ToolId | null>;
+  inventorySlots: Array<InventoryItem | null>;
   selectedSlot: number;
   lastAttackAt: number;
+  shieldUntilMs: number;
   xp: number;
   gold: number;
   groupId: string | null;
@@ -43,7 +44,14 @@ type ToolId =
   | "pickaxe"
   | "diamond-mace"
   | "diamond-pickaxe"
-  | "diamond-sword";
+  | "diamond-sword"
+  | "obsidian-sword";
+
+type TotemId = "health-totem" | "shield-totem";
+
+type InventoryItem =
+  | { kind: "tool"; id: ToolId }
+  | { kind: "totem"; id: TotemId };
 
 type ToolStats = {
   id: ToolId;
@@ -54,7 +62,12 @@ type ToolStats = {
 
 type InventoryState = {
   selectedSlot: number;
-  slots: Array<(ToolStats & { slot: number }) | null>;
+  slots: Array<({ kind: "tool" } & ToolStats & { slot: number }) | ({
+    kind: "totem";
+    id: TotemId;
+    name: string;
+    slot: number;
+  }) | null>;
 };
 
 type Section = {
@@ -71,6 +84,7 @@ type EnemyState = {
   health: number;
   maxHealth: number;
   isAlive: boolean;
+  lastAttackAtMs: number;
 };
 
 type BossState = {
@@ -78,11 +92,14 @@ type BossState = {
   name: string;
   structureName: string;
   sectionKey: string;
+  spawnX: number;
+  spawnY: number;
   x: number;
   y: number;
   health: number;
   maxHealth: number;
   isAlive: boolean;
+  nextSpawnEligibleAtMs: number;
   respawnMs: number;
   triggerX: number;
   triggerY: number;
@@ -95,6 +112,16 @@ type ChestState = {
   y: number;
   isOpened: boolean;
   respawnAtMs: number | null;
+};
+
+type ShopState = {
+  id: string;
+  name: string;
+  sectionKey: string;
+  x: number;
+  y: number;
+  toolPrices: Partial<Record<ToolId, number>>;
+  totemPrices: Record<TotemId, number>;
 };
 
 type GroupState = {
@@ -135,7 +162,15 @@ const ATTACK_RANGE = 20;
 const KILL_XP_REWARD = 25;
 const KILL_GOLD_REWARD = 10;
 const ENEMY_RESPAWN_MS = 10000;
+const ENEMY_ATTACK_DAMAGE = 1;
+const ENEMY_ATTACK_COOLDOWN_MS = 1000;
+const ENEMY_AGGRO_RANGE = 100;
+const ENEMY_ATTACK_RANGE = 9;
+const ENEMY_MOVE_PER_TICK = 7;
 const BOSS_ATTACK_RANGE = 25;
+const BOSS_ATTACK_DAMAGE = 10;
+const BOSS_ATTACK_CONTACT_RANGE = 12;
+const BOSS_PILLAR_SPAWN_RANGE = 30;
 const BOSS_KILL_XP_REWARD = 200;
 const BOSS_KILL_GOLD_REWARD = 120;
 const BOSS_TRIGGER_RANGE = 8;
@@ -144,6 +179,11 @@ const CHEST_OPEN_RANGE = 14;
 const CHEST_RESPAWN_MS = 30000;
 const INVENTORY_SLOT_COUNT = 10;
 const TOOL_EXCHANGE_GOLD = 5;
+const TOTEM_CHEST_CHANCE = 0.05;
+const OBSIDIAN_CHEST_CHANCE = 0.01;
+const SHIELD_DURATION_MS = 5000;
+const SHIELD_BLOCK_RADIUS = 10;
+const SHOP_INTERACT_RANGE = 20;
 
 const TOOL_CONFIG: Record<ToolId, ToolStats> = {
   sword: { id: "sword", name: "Sword", damage: 5, cooldownMs: 1000 },
@@ -161,7 +201,18 @@ const TOOL_CONFIG: Record<ToolId, ToolStats> = {
     name: "Diamond Sword",
     damage: 10,
     cooldownMs: 700
+  },
+  "obsidian-sword": {
+    id: "obsidian-sword",
+    name: "Obsidian Sword",
+    damage: 12,
+    cooldownMs: 650
   }
+};
+
+const TOTEM_NAMES: Record<TotemId, string> = {
+  "health-totem": "Health Totem",
+  "shield-totem": "Shield Totem"
 };
 
 const rawUsers = [
@@ -186,6 +237,7 @@ const sections = new Map<string, Section>();
 const enemies = new Map<string, EnemyState>();
 const bosses = new Map<string, BossState>();
 const chests = new Map<string, ChestState>();
+const shops = new Map<string, ShopState>();
 const groups = new Map<string, GroupState>();
 const newsPosts: NewsPost[] = [
   {
@@ -239,7 +291,11 @@ function createWorld(): void {
       const section: Section = { key, center, enemyIds: [] };
       sections.set(key, section);
 
-      // Two starter enemies per section for Sprint 2 testing.
+      // 4x lower density: only seed enemies in one out of every four sections.
+      if ((Math.abs(gx) + Math.abs(gy)) % 4 !== 0) {
+        continue;
+      }
+
       for (let i = 0; i < 2; i += 1) {
         const enemyId = `enemy-${enemyCounter}`;
         enemyCounter += 1;
@@ -253,7 +309,8 @@ function createWorld(): void {
           y: clamp(center.y + offsetY, -WORLD_LIMIT, WORLD_LIMIT),
           health: 100,
           maxHealth: 100,
-          isAlive: true
+          isAlive: true,
+          lastAttackAtMs: 0
         };
         enemies.set(enemy.id, enemy);
         section.enemyIds.push(enemy.id);
@@ -286,7 +343,7 @@ function createBosses(): void {
       structureName: "Hydra Lake",
       x: 360,
       y: 340,
-      maxHealth: 800,
+      maxHealth: 50,
       respawnMs: 45000,
       triggerX: 420,
       triggerY: 300
@@ -297,7 +354,7 @@ function createBosses(): void {
       structureName: "Cyclops Cave",
       x: -430,
       y: -320,
-      maxHealth: 950,
+      maxHealth: 50,
       respawnMs: 60000,
       triggerX: -500,
       triggerY: -260
@@ -315,11 +372,14 @@ function createBosses(): void {
       name: boss.name,
       structureName: boss.structureName,
       sectionKey,
+      spawnX: boss.x,
+      spawnY: boss.y,
       x: boss.x,
       y: boss.y,
       health: boss.maxHealth,
       maxHealth: boss.maxHealth,
-      isAlive: true,
+      isAlive: false,
+      nextSpawnEligibleAtMs: 0,
       respawnMs: boss.respawnMs,
       triggerX: boss.triggerX,
       triggerY: boss.triggerY
@@ -328,6 +388,55 @@ function createBosses(): void {
 }
 
 createBosses();
+
+function createShops(): void {
+  const seedShops = [
+    {
+      id: "shop-harbor",
+      name: "Harbor Smith",
+      x: 120,
+      y: 40,
+      obsidianPrice: 25,
+      healthTotemPrice: 6,
+      shieldTotemPrice: 8
+    },
+    {
+      id: "shop-cave",
+      name: "Cave Forge",
+      x: -220,
+      y: 180,
+      obsidianPrice: 100,
+      healthTotemPrice: 9,
+      shieldTotemPrice: 10
+    }
+  ];
+
+  for (const shop of seedShops) {
+    const sectionKey = getSectionKeyForPosition(shop.x, shop.y);
+    shops.set(shop.id, {
+      id: shop.id,
+      name: shop.name,
+      sectionKey,
+      x: shop.x,
+      y: shop.y,
+      toolPrices: {
+        sword: 12,
+        mace: 16,
+        pickaxe: 14,
+        "diamond-mace": 28,
+        "diamond-pickaxe": 26,
+        "diamond-sword": 30,
+        "obsidian-sword": shop.obsidianPrice
+      },
+      totemPrices: {
+        "health-totem": shop.healthTotemPrice,
+        "shield-totem": shop.shieldTotemPrice
+      }
+    });
+  }
+}
+
+createShops();
 
 function getOrCreatePlayer(username: string): PlayerState {
   const existing = players.get(username);
@@ -341,9 +450,10 @@ function getOrCreatePlayer(username: string): PlayerState {
     y: 0,
     health: 50,
     equippedTool: "sword",
-    inventorySlots: ["sword", null, null, null, null, null, null, null, null, null],
+    inventorySlots: [{ kind: "tool", id: "sword" }, null, null, null, null, null, null, null, null, null],
     selectedSlot: 0,
     lastAttackAt: 0,
+    shieldUntilMs: 0,
     xp: 0,
     gold: 0,
     groupId: null
@@ -355,32 +465,97 @@ function getOrCreatePlayer(username: string): PlayerState {
 function toInventoryState(player: PlayerState): InventoryState {
   return {
     selectedSlot: player.selectedSlot,
-    slots: player.inventorySlots.map((toolId, index) =>
-      toolId ? { ...TOOL_CONFIG[toolId], slot: index } : null
-    )
+    slots: player.inventorySlots.map((item, index) => {
+      if (!item) {
+        return null;
+      }
+      if (item.kind === "tool") {
+        return { kind: "tool", ...TOOL_CONFIG[item.id], slot: index };
+      }
+      return { kind: "totem", id: item.id, name: TOTEM_NAMES[item.id], slot: index };
+    })
   };
+}
+
+function isToolItem(item: InventoryItem | null): item is { kind: "tool"; id: ToolId } {
+  return !!item && item.kind === "tool";
+}
+
+function isShieldActive(player: PlayerState): boolean {
+  return Date.now() < player.shieldUntilMs;
 }
 
 function setSelectedSlot(player: PlayerState, slot: number): void {
   player.selectedSlot = clamp(Math.floor(slot), 0, INVENTORY_SLOT_COUNT - 1);
-  player.equippedTool = player.inventorySlots[player.selectedSlot];
+  const selectedItem = player.inventorySlots[player.selectedSlot];
+  player.equippedTool = isToolItem(selectedItem) ? selectedItem.id : null;
 }
 
 function addToolToInventory(player: PlayerState, toolId: ToolId): number {
-  const existingIndex = player.inventorySlots.findIndex((slotTool) => slotTool === toolId);
+  const existingIndex = player.inventorySlots.findIndex(
+    (slotItem) => !!slotItem && slotItem.kind === "tool" && slotItem.id === toolId
+  );
   if (existingIndex >= 0) {
     setSelectedSlot(player, existingIndex);
     return existingIndex;
   }
 
-  const emptyIndex = player.inventorySlots.findIndex((slotTool) => slotTool === null);
+  const emptyIndex = player.inventorySlots.findIndex((slotItem) => slotItem === null);
   if (emptyIndex < 0) {
     return -1;
   }
 
-  player.inventorySlots[emptyIndex] = toolId;
+  player.inventorySlots[emptyIndex] = { kind: "tool", id: toolId };
   setSelectedSlot(player, emptyIndex);
   return emptyIndex;
+}
+
+function addTotemToInventory(player: PlayerState, totemId: TotemId): number {
+  const existingIndex = player.inventorySlots.findIndex(
+    (slotItem) => !!slotItem && slotItem.kind === "totem" && slotItem.id === totemId
+  );
+  if (existingIndex >= 0) {
+    setSelectedSlot(player, existingIndex);
+    return existingIndex;
+  }
+
+  const emptyIndex = player.inventorySlots.findIndex((slotItem) => slotItem === null);
+  if (emptyIndex < 0) {
+    return -1;
+  }
+
+  player.inventorySlots[emptyIndex] = { kind: "totem", id: totemId };
+  setSelectedSlot(player, emptyIndex);
+  return emptyIndex;
+}
+
+function getNearestPlayer(position: Vec2, maxRange: number): PlayerState | null {
+  let nearest: PlayerState | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  for (const player of players.values()) {
+    const d = distance(position, { x: player.x, y: player.y });
+    if (d < nearestDistance && d <= maxRange) {
+      nearestDistance = d;
+      nearest = player;
+    }
+  }
+
+  return nearest;
+}
+
+function moveToward(origin: Vec2, target: Vec2, step: number): Vec2 {
+  const d = distance(origin, target);
+  if (d === 0 || d <= step) {
+    return { x: target.x, y: target.y };
+  }
+
+  const nx = (target.x - origin.x) / d;
+  const ny = (target.y - origin.y) / d;
+  return {
+    x: origin.x + nx * step,
+    y: origin.y + ny * step
+  };
 }
 
 function getPlayerActiveSectionKeys(player: PlayerState): string[] {
@@ -453,6 +628,20 @@ function getVisibleChests(activeSectionKeys: string[]): ChestState[] {
   return visible;
 }
 
+function getVisibleShops(activeSectionKeys: string[]): ShopState[] {
+  const activeSet = new Set(activeSectionKeys);
+  const visible: ShopState[] = [];
+
+  for (const shop of shops.values()) {
+    if (!activeSet.has(shop.sectionKey)) {
+      continue;
+    }
+    visible.push(shop);
+  }
+
+  return visible;
+}
+
 function rollChestTool(): ToolId {
   const roll = Math.random();
 
@@ -469,6 +658,23 @@ function rollChestTool(): ToolId {
   }
 
   return "sword";
+}
+
+function rollChestLoot(): InventoryItem {
+  const roll = Math.random();
+
+  if (roll < OBSIDIAN_CHEST_CHANCE) {
+    return { kind: "tool", id: "obsidian-sword" };
+  }
+
+  if (roll < OBSIDIAN_CHEST_CHANCE + TOTEM_CHEST_CHANCE) {
+    return {
+      kind: "totem",
+      id: Math.random() < 0.5 ? "health-totem" : "shield-totem"
+    };
+  }
+
+  return { kind: "tool", id: rollChestTool() };
 }
 
 function getGroupForPlayer(username: string): GroupState | null {
@@ -508,19 +714,26 @@ function buildWorldState(username: string): {
   enemies: EnemyState[];
   bosses: BossState[];
   chests: ChestState[];
+  shops: ShopState[];
   inventory: InventoryState;
   group: GroupState | null;
+  shieldActive: boolean;
+  shieldRemainingMs: number;
 } {
   const player = getOrCreatePlayer(username);
   const activeSections = getPlayerActiveSectionKeys(player);
+  const shieldRemainingMs = Math.max(0, player.shieldUntilMs - Date.now());
   return {
     player,
     activeSections,
     enemies: getVisibleEnemies(activeSections),
     bosses: getVisibleBosses(activeSections),
     chests: getVisibleChests(activeSections),
+    shops: getVisibleShops(activeSections),
     inventory: toInventoryState(player),
-    group: getGroupForPlayer(username)
+    group: getGroupForPlayer(username),
+    shieldActive: shieldRemainingMs > 0,
+    shieldRemainingMs
   };
 }
 
@@ -540,6 +753,7 @@ function respawnEnemy(enemyId: string): void {
   enemy.y = clamp(section.center.y + offsetY, -WORLD_LIMIT, WORLD_LIMIT);
   enemy.health = enemy.maxHealth;
   enemy.isAlive = true;
+  enemy.lastAttackAtMs = 0;
 }
 
 function respawnBoss(bossId: string): void {
@@ -548,8 +762,12 @@ function respawnBoss(bossId: string): void {
     return;
   }
 
+  boss.x = boss.spawnX;
+  boss.y = boss.spawnY;
+  boss.sectionKey = getSectionKeyForPosition(boss.x, boss.y);
   boss.health = boss.maxHealth;
   boss.isAlive = true;
+  boss.nextSpawnEligibleAtMs = 0;
 }
 
 function tickActiveEnemies(): void {
@@ -557,6 +775,7 @@ function tickActiveEnemies(): void {
   if (activeSections.size === 0) {
     return;
   }
+  const now = Date.now();
 
   for (const enemy of enemies.values()) {
     if (!enemy.isAlive) {
@@ -566,14 +785,56 @@ function tickActiveEnemies(): void {
       continue;
     }
 
-    // Sprint 2 movement: enemies drift a little only in active sections.
-    enemy.x = clamp(enemy.x + (Math.random() - 0.5) * 8, -WORLD_LIMIT, WORLD_LIMIT);
-    enemy.y = clamp(enemy.y + (Math.random() - 0.5) * 8, -WORLD_LIMIT, WORLD_LIMIT);
+    const nearestPlayer = getNearestPlayer({ x: enemy.x, y: enemy.y }, ENEMY_AGGRO_RANGE);
+    if (!nearestPlayer) {
+      continue;
+    }
+
+    const playerPos = { x: nearestPlayer.x, y: nearestPlayer.y };
+    const currentDistance = distance({ x: enemy.x, y: enemy.y }, playerPos);
+
+    if (currentDistance > ENEMY_ATTACK_RANGE) {
+      const nextPos = moveToward({ x: enemy.x, y: enemy.y }, playerPos, ENEMY_MOVE_PER_TICK);
+      const distanceAfterMove = distance(nextPos, playerPos);
+      if (!(isShieldActive(nearestPlayer) && distanceAfterMove <= SHIELD_BLOCK_RADIUS)) {
+        enemy.x = clamp(nextPos.x, -WORLD_LIMIT, WORLD_LIMIT);
+        enemy.y = clamp(nextPos.y, -WORLD_LIMIT, WORLD_LIMIT);
+        enemy.sectionKey = getSectionKeyForPosition(enemy.x, enemy.y);
+      }
+    }
+
+    const attackDistance = distance({ x: enemy.x, y: enemy.y }, playerPos);
+    if (attackDistance <= ENEMY_ATTACK_RANGE && !(isShieldActive(nearestPlayer) && attackDistance <= SHIELD_BLOCK_RADIUS)) {
+      if (now - enemy.lastAttackAtMs < ENEMY_ATTACK_COOLDOWN_MS) {
+        continue;
+      }
+      enemy.lastAttackAtMs = now;
+      nearestPlayer.health = Math.max(0, nearestPlayer.health - ENEMY_ATTACK_DAMAGE);
+    }
   }
 }
 
 function tickActiveBosses(): void {
   const activeSections = getGlobalActiveSectionKeys();
+  const now = Date.now();
+
+  // Bosses only materialize when a player gets close to the pillar-center spawn point.
+  for (const boss of bosses.values()) {
+    if (boss.isAlive) {
+      continue;
+    }
+    if (now < boss.nextSpawnEligibleAtMs) {
+      continue;
+    }
+
+    const nearestToSpawn = getNearestPlayer({ x: boss.spawnX, y: boss.spawnY }, BOSS_PILLAR_SPAWN_RANGE);
+    if (!nearestToSpawn) {
+      continue;
+    }
+
+    respawnBoss(boss.id);
+  }
+
   if (activeSections.size === 0) {
     return;
   }
@@ -586,17 +847,24 @@ function tickActiveBosses(): void {
       continue;
     }
 
-    boss.x = clamp(
-      boss.x + (Math.random() - 0.5) * (BOSS_MOVE_PER_TICK * 2),
-      -WORLD_LIMIT,
-      WORLD_LIMIT
-    );
-    boss.y = clamp(
-      boss.y + (Math.random() - 0.5) * (BOSS_MOVE_PER_TICK * 2),
-      -WORLD_LIMIT,
-      WORLD_LIMIT
-    );
+    const nearestPlayer = getNearestPlayer({ x: boss.x, y: boss.y }, WORLD_LIMIT * 2);
+    if (!nearestPlayer) {
+      continue;
+    }
+
+    const playerPos = { x: nearestPlayer.x, y: nearestPlayer.y };
+    const nextPos = moveToward({ x: boss.x, y: boss.y }, playerPos, BOSS_MOVE_PER_TICK);
+    const distanceAfterMove = distance(nextPos, playerPos);
+    if (!(isShieldActive(nearestPlayer) && distanceAfterMove <= SHIELD_BLOCK_RADIUS)) {
+      boss.x = clamp(nextPos.x, -WORLD_LIMIT, WORLD_LIMIT);
+      boss.y = clamp(nextPos.y, -WORLD_LIMIT, WORLD_LIMIT);
+    }
     boss.sectionKey = getSectionKeyForPosition(boss.x, boss.y);
+
+    const attackDistance = distance({ x: boss.x, y: boss.y }, playerPos);
+    if (attackDistance <= BOSS_ATTACK_CONTACT_RANGE && !(isShieldActive(nearestPlayer) && attackDistance <= SHIELD_BLOCK_RADIUS)) {
+      nearestPlayer.health = Math.max(0, nearestPlayer.health - BOSS_ATTACK_DAMAGE);
+    }
   }
 }
 
@@ -958,9 +1226,9 @@ app.post("/api/inventory/exchange", requireAuth, (req: AuthRequest, res: Respons
   }
 
   const player = getOrCreatePlayer(username);
-  const selectedTool = player.inventorySlots[player.selectedSlot];
-  if (!selectedTool) {
-    res.status(400).json({ error: "Selected slot is empty" });
+  const selectedItem = player.inventorySlots[player.selectedSlot];
+  if (!isToolItem(selectedItem)) {
+    res.status(400).json({ error: "Selected slot must contain a tool to exchange" });
     return;
   }
 
@@ -975,11 +1243,107 @@ app.post("/api/inventory/exchange", requireAuth, (req: AuthRequest, res: Respons
   player.gold += TOOL_EXCHANGE_GOLD;
 
   res.json({
-    message: `Exchanged ${TOOL_CONFIG[selectedTool].name} for ${TOOL_EXCHANGE_GOLD} gold`,
-    exchangedTool: TOOL_CONFIG[selectedTool],
+    message: `Exchanged ${TOOL_CONFIG[selectedItem.id].name} for ${TOOL_EXCHANGE_GOLD} gold`,
+    exchangedTool: TOOL_CONFIG[selectedItem.id],
     goldAdded: TOOL_EXCHANGE_GOLD,
     ...buildWorldState(username)
   });
+});
+
+app.post("/api/inventory/use-selected", requireAuth, (req: AuthRequest, res: Response) => {
+  const username = req.user?.username;
+  if (!username) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const player = getOrCreatePlayer(username);
+  const selectedItem = player.inventorySlots[player.selectedSlot];
+  if (!selectedItem || selectedItem.kind !== "totem") {
+    res.status(400).json({ error: "Selected slot must contain a totem" });
+    return;
+  }
+
+  if (selectedItem.id === "health-totem") {
+    player.health = clamp(player.health + 10, 0, 50);
+  } else if (selectedItem.id === "shield-totem") {
+    player.shieldUntilMs = Date.now() + SHIELD_DURATION_MS;
+  }
+
+  player.inventorySlots[player.selectedSlot] = null;
+  player.equippedTool = null;
+
+  res.json({
+    message: `${TOTEM_NAMES[selectedItem.id]} used`,
+    ...buildWorldState(username)
+  });
+});
+
+app.post("/api/shops/buy", requireAuth, (req: AuthRequest, res: Response) => {
+  const username = req.user?.username;
+  if (!username) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const shopId = String(req.body?.shopId ?? "");
+  const itemId = String(req.body?.itemId ?? "") as ToolId | TotemId;
+  if (!shopId || !itemId) {
+    res.status(400).json({ error: "shopId and itemId are required" });
+    return;
+  }
+
+  const shop = shops.get(shopId);
+  if (!shop) {
+    res.status(404).json({ error: "Shop not found" });
+    return;
+  }
+
+  const player = getOrCreatePlayer(username);
+  const shopDistance = distance({ x: player.x, y: player.y }, { x: shop.x, y: shop.y });
+  if (shopDistance > SHOP_INTERACT_RANGE) {
+    res.status(400).json({ error: `Move within ${SHOP_INTERACT_RANGE} feet of the shop.` });
+    return;
+  }
+
+  let price = 0;
+  let slot = -1;
+  let boughtName = "";
+
+  if (itemId in TOOL_CONFIG) {
+    const toolId = itemId as ToolId;
+    price = shop.toolPrices[toolId] ?? -1;
+    if (price < 0) {
+      res.status(400).json({ error: "This tool is not sold at this shop" });
+      return;
+    }
+    if (player.gold < price) {
+      res.status(400).json({ error: `Need ${price} gold` });
+      return;
+    }
+    slot = addToolToInventory(player, toolId);
+    boughtName = TOOL_CONFIG[toolId].name;
+  } else if (itemId === "health-totem" || itemId === "shield-totem") {
+    const totemId = itemId as TotemId;
+    price = shop.totemPrices[totemId];
+    if (player.gold < price) {
+      res.status(400).json({ error: `Need ${price} gold` });
+      return;
+    }
+    slot = addTotemToInventory(player, totemId);
+    boughtName = TOTEM_NAMES[totemId];
+  } else {
+    res.status(400).json({ error: "Unknown itemId" });
+    return;
+  }
+
+  if (slot < 0) {
+    res.status(400).json({ error: "Inventory is full." });
+    return;
+  }
+
+  player.gold -= price;
+  res.json({ message: `Bought ${boughtName} for ${price} gold`, slot, ...buildWorldState(username) });
 });
 
 app.post("/api/chests/open", requireAuth, (req: AuthRequest, res: Response) => {
@@ -1015,8 +1379,10 @@ app.post("/api/chests/open", requireAuth, (req: AuthRequest, res: Response) => {
     return;
   }
 
-  const toolId = rollChestTool();
-  const assignedSlot = addToolToInventory(player, toolId);
+  const loot = rollChestLoot();
+  const assignedSlot = loot.kind === "tool"
+    ? addToolToInventory(player, loot.id)
+    : addTotemToInventory(player, loot.id);
   if (assignedSlot < 0) {
     res.status(400).json({ error: "Inventory is full. Exchange or use a slot first." });
     return;
@@ -1026,8 +1392,14 @@ app.post("/api/chests/open", requireAuth, (req: AuthRequest, res: Response) => {
   chest.respawnAtMs = Date.now() + CHEST_RESPAWN_MS;
 
   res.json({
-    message: `Chest opened. You got ${TOOL_CONFIG[toolId].name}.`,
-    tool: TOOL_CONFIG[toolId],
+    message:
+      loot.kind === "tool"
+        ? `Chest opened. You got ${TOOL_CONFIG[loot.id].name}.`
+        : `Chest opened. You got ${TOTEM_NAMES[loot.id]}.`,
+    loot:
+      loot.kind === "tool"
+        ? { kind: "tool", ...TOOL_CONFIG[loot.id] }
+        : { kind: "totem", id: loot.id, name: TOTEM_NAMES[loot.id] },
     slot: assignedSlot,
     ...buildWorldState(username)
   });
@@ -1150,12 +1522,9 @@ app.post("/api/combat/attack-boss", requireAuth, (req: AuthRequest, res: Respons
   if (boss.health === 0) {
     defeated = true;
     boss.isAlive = false;
+    boss.nextSpawnEligibleAtMs = Date.now() + boss.respawnMs;
     player.xp += BOSS_KILL_XP_REWARD;
     player.gold += BOSS_KILL_GOLD_REWARD;
-
-    setTimeout(() => {
-      respawnBoss(boss.id);
-    }, boss.respawnMs);
   }
 
   res.json({
@@ -1207,6 +1576,17 @@ app.post("/api/bosses/hidden-respawn", requireAuth, (req: AuthRequest, res: Resp
   if (triggerDistance > BOSS_TRIGGER_RANGE) {
     res.status(400).json({
       error: `You must stand on the hidden button (within ${BOSS_TRIGGER_RANGE} feet).`
+    });
+    return;
+  }
+
+  const spawnDistance = distance(
+    { x: player.x, y: player.y },
+    { x: boss.spawnX, y: boss.spawnY }
+  );
+  if (spawnDistance > BOSS_PILLAR_SPAWN_RANGE) {
+    res.status(400).json({
+      error: `Move within ${BOSS_PILLAR_SPAWN_RANGE} feet of the pillar center to spawn ${boss.name}.`
     });
     return;
   }

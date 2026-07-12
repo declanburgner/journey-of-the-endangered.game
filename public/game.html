@@ -177,6 +177,16 @@
         <button id="refreshBtn">Refresh World</button>
         <button id="createGroupBtn">Create Group</button>
         <button id="exchangeBtn">Exchange Tool (Q)</button>
+        <button id="useItemBtn">Use Totem (R)</button>
+        <select id="shopItemSelect">
+          <option value="health-totem">Health Totem</option>
+          <option value="shield-totem">Shield Totem</option>
+          <option value="obsidian-sword">Obsidian Sword</option>
+          <option value="diamond-sword">Diamond Sword</option>
+          <option value="mace">Mace</option>
+          <option value="pickaxe">Pickaxe</option>
+        </select>
+        <button id="buyShopBtn">Buy From Nearby Shop</button>
         <button id="backBtn">Back</button>
       </div>
     </div>
@@ -222,7 +232,8 @@
         pickaxe: { name: "Pickaxe", damage: 6, cooldownMs: 500 },
         "diamond-mace": { name: "Diamond Mace", damage: 9, cooldownMs: 600 },
         "diamond-pickaxe": { name: "Diamond Pickaxe", damage: 8, cooldownMs: 400 },
-        "diamond-sword": { name: "Diamond Sword", damage: 10, cooldownMs: 700 }
+        "diamond-sword": { name: "Diamond Sword", damage: 10, cooldownMs: 700 },
+        "obsidian-sword": { name: "Obsidian Sword", damage: 12, cooldownMs: 650 }
       };
 
       const TOOL_SPRITES = {
@@ -263,10 +274,16 @@
       const enemyMeshes = new Map();
       const bossMeshes = new Map();
       const chestMeshes = new Map();
+      const shopMeshes = new Map();
+      let shieldCube = null;
 
       const hiddenButtons = [
         { bossId: "boss-hydra", label: "Hydra Button", x: 420, y: 300 },
         { bossId: "boss-cyclops", label: "Cyclops Button", x: -500, y: -260 }
+      ];
+      const bossSpawnMarkers = [
+        { id: "boss-hydra", x: 360, y: 340 },
+        { id: "boss-cyclops", x: -430, y: -320 }
       ];
       const hiddenButtonMeshes = new Map();
 
@@ -285,9 +302,89 @@
 
       const MOVE_SPEED = 22;
       const TURN_SPEED = 2.2;
+      const BIOMES = [
+        {
+          id: "forest",
+          name: "Forest",
+          minX: -900,
+          maxX: 900,
+          minY: -900,
+          maxY: 900,
+          treeCount: 70,
+          bushCount: 110
+        }
+      ];
 
       function setStatus(text) {
         statusEl.textContent = text;
+      }
+
+      function seededNoise(seed) {
+        const x = Math.sin(seed * 12.9898) * 43758.5453;
+        return x - Math.floor(x);
+      }
+
+      function spawnForestTree(x, z, index) {
+        const trunk = BABYLON.MeshBuilder.CreateCylinder(
+          `forest-tree-trunk-${index}`,
+          { diameter: 2.5, height: 16, tessellation: 12 },
+          scene
+        );
+        const trunkMat = new BABYLON.StandardMaterial(`forest-tree-trunk-mat-${index}`, scene);
+        trunkMat.diffuseColor = new BABYLON.Color3(0.38, 0.24, 0.11);
+        trunk.material = trunkMat;
+        trunk.position.x = x;
+        trunk.position.y = 8;
+        trunk.position.z = z;
+
+        const leaves = BABYLON.MeshBuilder.CreateSphere(
+          `forest-tree-leaves-${index}`,
+          { diameter: 11, segments: 12 },
+          scene
+        );
+        const leavesMat = new BABYLON.StandardMaterial(`forest-tree-leaves-mat-${index}`, scene);
+        leavesMat.diffuseColor = new BABYLON.Color3(0.18, 0.58, 0.22);
+        leaves.material = leavesMat;
+        leaves.position.x = x;
+        leaves.position.y = 18;
+        leaves.position.z = z;
+      }
+
+      function spawnForestBush(x, z, index) {
+        const bush = BABYLON.MeshBuilder.CreateSphere(
+          `forest-bush-${index}`,
+          { diameter: 7, segments: 12 },
+          scene
+        );
+        const bushMat = new BABYLON.StandardMaterial(`forest-bush-mat-${index}`, scene);
+        bushMat.diffuseColor = new BABYLON.Color3(0.2, 0.62, 0.24);
+        bush.material = bushMat;
+        bush.position.x = x;
+        bush.position.y = 3.5;
+        bush.position.z = z;
+      }
+
+      function setupBiomes() {
+        for (const biome of BIOMES) {
+          if (biome.id !== "forest") {
+            continue;
+          }
+
+          const width = biome.maxX - biome.minX;
+          const depth = biome.maxY - biome.minY;
+
+          for (let i = 0; i < biome.treeCount; i += 1) {
+            const px = biome.minX + seededNoise(i * 2 + 11) * width;
+            const pz = biome.minY + seededNoise(i * 2 + 29) * depth;
+            spawnForestTree(px, pz, i);
+          }
+
+          for (let i = 0; i < biome.bushCount; i += 1) {
+            const px = biome.minX + seededNoise(i * 3 + 47) * width;
+            const pz = biome.minY + seededNoise(i * 3 + 71) * depth;
+            spawnForestBush(px, pz, i);
+          }
+        }
       }
 
       function shortToolLabel(toolName) {
@@ -343,6 +440,32 @@
         }
       }
 
+      function setupBossSpawnPillars() {
+        const offsets = [
+          { x: 18, y: 18 },
+          { x: 18, y: -18 },
+          { x: -18, y: 18 },
+          { x: -18, y: -18 }
+        ];
+
+        for (const marker of bossSpawnMarkers) {
+          offsets.forEach((offset, index) => {
+            const pillar = BABYLON.MeshBuilder.CreateCylinder(
+              `spawn-pillar-${marker.id}-${index}`,
+              { diameter: 3.5, height: 18, tessellation: 24 },
+              scene
+            );
+            const mat = new BABYLON.StandardMaterial(`spawn-pillar-mat-${marker.id}-${index}`, scene);
+            mat.diffuseColor = new BABYLON.Color3(0.5, 0.5, 0.5);
+            mat.specularColor = new BABYLON.Color3(0.12, 0.12, 0.12);
+            pillar.material = mat;
+            pillar.position.x = marker.x + offset.x;
+            pillar.position.y = 9;
+            pillar.position.z = marker.y + offset.y;
+          });
+        }
+      }
+
       function upsertEnemyMesh(enemy) {
         let mesh = enemyMeshes.get(enemy.id);
         if (!mesh) {
@@ -368,7 +491,7 @@
           );
           const mat = new BABYLON.StandardMaterial(`boss-mat-${boss.id}`, scene);
           mat.diffuseColor = isHydra
-            ? new BABYLON.Color3(0.1, 0.8, 0.45)
+            ? new BABYLON.Color3(0.56, 0.23, 0.75)
             : new BABYLON.Color3(0.75, 0.7, 0.2);
           mesh.material = mat;
           bossMeshes.set(boss.id, mesh);
@@ -397,7 +520,21 @@
         mesh.position.z = chest.y;
       }
 
-      function cleanupMissingMeshes(liveEnemies, liveBosses, liveChests) {
+      function upsertShopMesh(shop) {
+        let mesh = shopMeshes.get(shop.id);
+        if (!mesh) {
+          mesh = BABYLON.MeshBuilder.CreateBox(shop.id, { width: 16, height: 10, depth: 16 }, scene);
+          const mat = new BABYLON.StandardMaterial(`shop-mat-${shop.id}`, scene);
+          mat.diffuseColor = new BABYLON.Color3(0.22, 0.45, 0.8);
+          mesh.material = mat;
+          shopMeshes.set(shop.id, mesh);
+        }
+        mesh.position.x = shop.x;
+        mesh.position.y = 5;
+        mesh.position.z = shop.y;
+      }
+
+      function cleanupMissingMeshes(liveEnemies, liveBosses, liveChests, liveShops) {
         const liveEnemyIds = new Set(liveEnemies.map((e) => e.id));
         for (const [id, mesh] of enemyMeshes) {
           if (!liveEnemyIds.has(id)) {
@@ -420,6 +557,36 @@
             mesh.dispose();
             chestMeshes.delete(id);
           }
+        }
+
+        const liveShopIds = new Set(liveShops.map((s) => s.id));
+        for (const [id, mesh] of shopMeshes) {
+          if (!liveShopIds.has(id)) {
+            mesh.dispose();
+            shopMeshes.delete(id);
+          }
+        }
+      }
+
+      function updateShieldVisual(data) {
+        if (data.shieldActive) {
+          if (!shieldCube) {
+            shieldCube = BABYLON.MeshBuilder.CreateBox(
+              "shield-cube",
+              { width: 22, height: 12, depth: 22 },
+              scene
+            );
+            const shieldMat = new BABYLON.StandardMaterial("shield-mat", scene);
+            shieldMat.diffuseColor = new BABYLON.Color3(1, 0.55, 0.1);
+            shieldMat.alpha = 0.28;
+            shieldCube.material = shieldMat;
+          }
+          shieldCube.position.x = data.player.x;
+          shieldCube.position.y = 6;
+          shieldCube.position.z = data.player.y;
+          shieldCube.setEnabled(true);
+        } else if (shieldCube) {
+          shieldCube.setEnabled(false);
         }
       }
 
@@ -448,10 +615,14 @@
         for (const chest of data.chests || []) {
           upsertChestMesh(chest);
         }
-        cleanupMissingMeshes(data.enemies, data.bosses || [], data.chests || []);
+        for (const shop of data.shops || []) {
+          upsertShopMesh(shop);
+        }
+        cleanupMissingMeshes(data.enemies, data.bosses || [], data.chests || [], data.shops || []);
         renderInventory(data.inventory);
+        updateShieldVisual(data);
 
-        setStatus(`Sections active: ${data.activeSections.length} | Enemies: ${data.enemies.length} | Bosses: ${(data.bosses || []).length} | Chests: ${(data.chests || []).length}`);
+        setStatus(`Sections active: ${data.activeSections.length} | Enemies: ${data.enemies.length} | Bosses: ${(data.bosses || []).length} | Chests: ${(data.chests || []).length} | Shops: ${(data.shops || []).length}`);
       }
 
       async function api(path, method = "GET", body = null) {
@@ -622,6 +793,11 @@
             const data = await api("/api/chests/open", "POST", { chestId: targetId });
             renderWorldState(data);
             setStatus(data.message);
+            return;
+          }
+
+          if (shopMeshes.has(targetId)) {
+            await buyFromShop(targetId);
           }
         } catch (error) {
           setStatus(`Attack failed: ${error.message}`);
@@ -648,6 +824,52 @@
         }
       }
 
+      async function useSelectedItem() {
+        try {
+          const data = await api("/api/inventory/use-selected", "POST", {});
+          renderWorldState(data);
+          setStatus(data.message);
+        } catch (error) {
+          setStatus(`Use item failed: ${error.message}`);
+        }
+      }
+
+      async function buyFromShop(shopId) {
+        const itemId = document.getElementById("shopItemSelect").value;
+        try {
+          const data = await api("/api/shops/buy", "POST", { shopId, itemId });
+          renderWorldState(data);
+          setStatus(data.message);
+        } catch (error) {
+          setStatus(`Shop buy failed: ${error.message}`);
+        }
+      }
+
+      async function buyFromNearestShop() {
+        if (!worldState || !Array.isArray(worldState.shops) || worldState.shops.length === 0) {
+          setStatus("No nearby shop visible.");
+          return;
+        }
+
+        const player = worldState.player;
+        let nearestShop = null;
+        let bestDist = Number.POSITIVE_INFINITY;
+        for (const shop of worldState.shops) {
+          const d = Math.hypot(player.x - shop.x, player.y - shop.y);
+          if (d < bestDist) {
+            bestDist = d;
+            nearestShop = shop;
+          }
+        }
+
+        if (!nearestShop) {
+          setStatus("No nearby shop found.");
+          return;
+        }
+
+        buyFromShop(nearestShop.id);
+      }
+
       scene.onKeyboardObservable.add((kbInfo) => {
         const key = kbInfo.event.key.toLowerCase();
         const isDown = kbInfo.type === BABYLON.KeyboardEventTypes.KEYDOWN;
@@ -662,6 +884,10 @@
         }
         if (key === "q") {
           exchangeSelectedTool();
+          return;
+        }
+        if (key === "r") {
+          useSelectedItem();
           return;
         }
 
@@ -748,6 +974,8 @@
         window.location.href = "/main.html";
       });
       document.getElementById("exchangeBtn").addEventListener("click", exchangeSelectedTool);
+      document.getElementById("useItemBtn").addEventListener("click", useSelectedItem);
+      document.getElementById("buyShopBtn").addEventListener("click", buyFromNearestShop);
 
       window.addEventListener("resize", () => {
         engine.resize();
@@ -755,7 +983,9 @@
 
       async function boot() {
         try {
+          setupBiomes();
           setupHiddenButtonMeshes();
+          setupBossSpawnPillars();
           await api("/api/world/join", "POST", { x: 0, y: 0 });
           await refreshWorld();
 
