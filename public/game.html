@@ -68,6 +68,32 @@
       #shopOverlay.open {
         display: flex;
       }
+      #deathOverlay {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(25, 0, 0, 0.55);
+        z-index: 45;
+        pointer-events: none;
+      }
+      #deathOverlay.open {
+        display: flex;
+      }
+      #deathPanel {
+        text-align: center;
+      }
+      #deathTitle {
+        color: #ff4545;
+        font-size: 2.2rem;
+        font-weight: 800;
+        margin-bottom: 6px;
+      }
+      #deathHint {
+        color: #ff8a8a;
+        font-size: 1rem;
+      }
       #hitFog {
         position: fixed;
         inset: 0;
@@ -252,6 +278,12 @@
         </div>
       </div>
     </div>
+    <div id="deathOverlay" aria-hidden="true">
+      <div id="deathPanel">
+        <div id="deathTitle">you died!</div>
+        <div id="deathHint">press space to play again</div>
+      </div>
+    </div>
     <div id="hitFog" aria-hidden="true"></div>
     <div id="touchControls" aria-label="Touch movement controls">
       <button id="touchForward" class="touchBtn">Forward</button>
@@ -285,6 +317,7 @@
       const shopOverlayEl = document.getElementById("shopOverlay");
       const shopTitleEl = document.getElementById("shopTitle");
       const shopRowsEl = document.getElementById("shopRows");
+      const deathOverlayEl = document.getElementById("deathOverlay");
       const hitFogEl = document.getElementById("hitFog");
       const inventorySlotEls = Array.from(document.querySelectorAll(".inventory-slot"));
 
@@ -361,6 +394,7 @@
       let buttonRespawnCooldownUntil = 0;
       let activeShopId = null;
       let gamePaused = false;
+      let deathScreenActive = false;
       let hitFogUntilMs = 0;
 
       const inputState = {
@@ -435,7 +469,34 @@
         activeShopId = null;
         shopOverlayEl.classList.remove("open");
         shopOverlayEl.setAttribute("aria-hidden", "true");
-        setGamePaused(false);
+        setGamePaused(deathScreenActive);
+      }
+
+      function setDeathScreen(active) {
+        deathScreenActive = active;
+        deathOverlayEl.classList.toggle("open", active);
+        deathOverlayEl.setAttribute("aria-hidden", active ? "false" : "true");
+
+        if (active) {
+          closeShopUi();
+          setGamePaused(true);
+          return;
+        }
+
+        if (!activeShopId) {
+          setGamePaused(false);
+        }
+      }
+
+      async function respawnAfterDeath() {
+        try {
+          const data = await api("/api/world/respawn", "POST", {});
+          setDeathScreen(false);
+          renderWorldState(data);
+          setStatus("You respawned.");
+        } catch (error) {
+          setStatus(`Respawn failed: ${error.message}`);
+        }
       }
 
       async function closeShopAndStepAway() {
@@ -526,6 +587,11 @@
       }
 
       function updateShopUiFromWorld(data) {
+        if (deathScreenActive || data?.player?.isDead) {
+          closeShopUi();
+          return;
+        }
+
         if (!data || !data.player || !Array.isArray(data.shops)) {
           closeShopUi();
           return;
@@ -843,6 +909,8 @@
         worldState = data;
         const player = data.player;
 
+        setDeathScreen(!!player.isDead);
+
         if (previousPlayer && previousPlayer.username === player.username && player.health < previousPlayer.health) {
           triggerHitFog();
         }
@@ -1142,6 +1210,12 @@
         }
 
         if (gamePaused) {
+          if (deathScreenActive) {
+            if (key === " ") {
+              respawnAfterDeath();
+            }
+            return;
+          }
           if (key === "escape") {
             closeShopAndStepAway();
           }

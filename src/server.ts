@@ -28,6 +28,7 @@ type PlayerState = {
   x: number;
   y: number;
   health: number;
+  isDead: boolean;
   equippedTool: ToolId | null;
   inventorySlots: Array<InventoryItem | null>;
   selectedSlot: number;
@@ -36,6 +37,7 @@ type PlayerState = {
   xp: number;
   gold: number;
   groupId: string | null;
+  lastSeenAtMs: number;
 };
 
 type ToolId =
@@ -186,6 +188,7 @@ const SHIELD_DURATION_MS = 5000;
 const SHIELD_BLOCK_RADIUS = 10;
 const SHOP_INTERACT_RANGE = 20;
 const TOTEM_STACK_MAX = 16;
+const PLAYER_INACTIVE_TIMEOUT_MS = 15000;
 
 const TOOL_CONFIG: Record<ToolId, ToolStats> = {
   sword: { id: "sword", name: "Sword", damage: 5, cooldownMs: 1000 },
@@ -451,6 +454,7 @@ function getOrCreatePlayer(username: string): PlayerState {
     x: 0,
     y: 0,
     health: 50,
+    isDead: false,
     equippedTool: "sword",
     inventorySlots: [{ kind: "tool", id: "sword" }, null, null, null, null, null, null, null, null, null],
     selectedSlot: 0,
@@ -458,10 +462,46 @@ function getOrCreatePlayer(username: string): PlayerState {
     shieldUntilMs: 0,
     xp: 0,
     gold: 0,
-    groupId: null
+    groupId: null,
+    lastSeenAtMs: Date.now()
   };
   players.set(username, created);
   return created;
+}
+
+function resetPlayerForNewRun(player: PlayerState): void {
+  player.x = 0;
+  player.y = 0;
+  player.health = 50;
+  player.isDead = false;
+  player.inventorySlots = [{ kind: "tool", id: "sword" }, null, null, null, null, null, null, null, null, null];
+  player.selectedSlot = 0;
+  player.equippedTool = "sword";
+  player.lastAttackAt = 0;
+  player.shieldUntilMs = 0;
+  player.xp = 0;
+  player.gold = 0;
+  player.lastSeenAtMs = Date.now();
+}
+
+function handlePlayerDeath(player: PlayerState): void {
+  if (player.isDead) {
+    return;
+  }
+
+  player.health = 0;
+  player.isDead = true;
+  player.gold = 0;
+  player.xp = 0;
+  player.inventorySlots = new Array(INVENTORY_SLOT_COUNT).fill(null);
+  player.equippedTool = null;
+  player.selectedSlot = 0;
+  player.shieldUntilMs = 0;
+  removePlayerFromGroup(player.username);
+}
+
+function isPlayerActive(player: PlayerState): boolean {
+  return Date.now() - player.lastSeenAtMs <= PLAYER_INACTIVE_TIMEOUT_MS;
 }
 
 function toInventoryState(player: PlayerState): InventoryState {
@@ -548,6 +588,10 @@ function getNearestPlayer(position: Vec2, maxRange: number): PlayerState | null 
   let nearestDistance = Number.POSITIVE_INFINITY;
 
   for (const player of players.values()) {
+    if (player.isDead || !isPlayerActive(player)) {
+      continue;
+    }
+
     const d = distance(position, { x: player.x, y: player.y });
     if (d < nearestDistance && d <= maxRange) {
       nearestDistance = d;
@@ -572,6 +616,9 @@ function getNearestEnemyTargetPlayer(position: Vec2, maxRange: number): PlayerSt
   let nearestDistance = Number.POSITIVE_INFINITY;
 
   for (const player of players.values()) {
+    if (player.isDead || !isPlayerActive(player)) {
+      continue;
+    }
     if (isPlayerInShopSafeZone(player)) {
       continue;
     }
@@ -601,6 +648,10 @@ function moveToward(origin: Vec2, target: Vec2, step: number): Vec2 {
 }
 
 function getPlayerActiveSectionKeys(player: PlayerState): string[] {
+  if (player.isDead || !isPlayerActive(player)) {
+    return [];
+  }
+
   const active: string[] = [];
   for (const section of sections.values()) {
     if (distance({ x: player.x, y: player.y }, section.center) <= SECTION_ACTIVATION_DISTANCE) {
@@ -853,6 +904,9 @@ function tickActiveEnemies(): void {
       }
       enemy.lastAttackAtMs = now;
       nearestPlayer.health = Math.max(0, nearestPlayer.health - ENEMY_ATTACK_DAMAGE);
+      if (nearestPlayer.health === 0) {
+        handlePlayerDeath(nearestPlayer);
+      }
     }
   }
 }
@@ -907,6 +961,9 @@ function tickActiveBosses(): void {
     const attackDistance = distance({ x: boss.x, y: boss.y }, playerPos);
     if (attackDistance <= BOSS_ATTACK_CONTACT_RANGE && !(isShieldActive(nearestPlayer) && attackDistance <= SHIELD_BLOCK_RADIUS)) {
       nearestPlayer.health = Math.max(0, nearestPlayer.health - BOSS_ATTACK_DAMAGE);
+      if (nearestPlayer.health === 0) {
+        handlePlayerDeath(nearestPlayer);
+      }
     }
   }
 }
@@ -942,6 +999,10 @@ function requireAuth(req: AuthRequest, res: Response, next: NextFunction): void 
   const token = authHeader.slice("Bearer ".length);
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as { username: string; role?: UserRole };
+    const activePlayer = players.get(decoded.username);
+    if (activePlayer) {
+      activePlayer.lastSeenAtMs = Date.now();
+    }
     req.user = {
       username: decoded.username,
       role: decoded.role ?? getUserRole(decoded.username)
@@ -1105,6 +1166,7 @@ app.post("/api/world/join", requireAuth, (req: AuthRequest, res: Response) => {
     player.x = clamp(requestedX, -WORLD_LIMIT, WORLD_LIMIT);
     player.y = clamp(requestedY, -WORLD_LIMIT, WORLD_LIMIT);
   }
+  player.lastSeenAtMs = Date.now();
 
   const state = buildWorldState(username);
   res.json({
@@ -1136,6 +1198,10 @@ app.post("/api/world/move", requireAuth, (req: AuthRequest, res: Response) => {
   }
 
   const player = getOrCreatePlayer(username);
+  if (player.isDead) {
+    res.status(400).json({ error: "You died. Press space to play again." });
+    return;
+  }
   const nextX = Number(req.body?.x);
   const nextY = Number(req.body?.y);
 
@@ -1232,6 +1298,23 @@ app.get("/api/group/state", requireAuth, (req: AuthRequest, res: Response) => {
   res.json({ group: getGroupForPlayer(username) });
 });
 
+app.post("/api/world/respawn", requireAuth, (req: AuthRequest, res: Response) => {
+  const username = req.user?.username;
+  if (!username) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const player = getOrCreatePlayer(username);
+  if (!player.isDead) {
+    res.status(400).json({ error: "Player is not dead." });
+    return;
+  }
+
+  resetPlayerForNewRun(player);
+  res.json({ message: "Respawned", ...buildWorldState(username) });
+});
+
 app.get("/api/world/bosses", requireAuth, (req: AuthRequest, res: Response) => {
   const username = req.user?.username;
   if (!username) {
@@ -1257,6 +1340,10 @@ app.post("/api/inventory/select", requireAuth, (req: AuthRequest, res: Response)
   }
 
   const player = getOrCreatePlayer(username);
+  if (player.isDead) {
+    res.status(400).json({ error: "You died. Press space to play again." });
+    return;
+  }
   setSelectedSlot(player, slot);
   res.json({ message: `Selected slot ${slot}`, ...buildWorldState(username) });
 });
@@ -1269,6 +1356,10 @@ app.post("/api/inventory/exchange", requireAuth, (req: AuthRequest, res: Respons
   }
 
   const player = getOrCreatePlayer(username);
+  if (player.isDead) {
+    res.status(400).json({ error: "You died. Press space to play again." });
+    return;
+  }
   const selectedItem = player.inventorySlots[player.selectedSlot];
   if (!isToolItem(selectedItem)) {
     res.status(400).json({ error: "Selected slot must contain a tool to exchange" });
@@ -1301,6 +1392,10 @@ app.post("/api/inventory/use-selected", requireAuth, (req: AuthRequest, res: Res
   }
 
   const player = getOrCreatePlayer(username);
+  if (player.isDead) {
+    res.status(400).json({ error: "You died. Press space to play again." });
+    return;
+  }
   const selectedItem = player.inventorySlots[player.selectedSlot];
   if (!selectedItem || selectedItem.kind !== "totem") {
     res.status(400).json({ error: "Selected slot must contain a totem" });
@@ -1346,6 +1441,10 @@ app.post("/api/shops/buy", requireAuth, (req: AuthRequest, res: Response) => {
   }
 
   const player = getOrCreatePlayer(username);
+  if (player.isDead) {
+    res.status(400).json({ error: "You died. Press space to play again." });
+    return;
+  }
   const shopDistance = distance({ x: player.x, y: player.y }, { x: shop.x, y: shop.y });
   if (shopDistance > SHOP_INTERACT_RANGE) {
     res.status(400).json({ error: `Move within ${SHOP_INTERACT_RANGE} feet of the shop.` });
@@ -1417,6 +1516,10 @@ app.post("/api/chests/open", requireAuth, (req: AuthRequest, res: Response) => {
   }
 
   const player = getOrCreatePlayer(username);
+  if (player.isDead) {
+    res.status(400).json({ error: "You died. Press space to play again." });
+    return;
+  }
   const chestDistance = distance({ x: player.x, y: player.y }, { x: chest.x, y: chest.y });
   if (chestDistance > CHEST_OPEN_RANGE) {
     res.status(400).json({
@@ -1459,6 +1562,10 @@ app.post("/api/combat/attack", requireAuth, (req: AuthRequest, res: Response) =>
   }
 
   const player = getOrCreatePlayer(username);
+  if (player.isDead) {
+    res.status(400).json({ error: "You died. Press space to play again." });
+    return;
+  }
   if (!player.equippedTool) {
     res.status(400).json({ error: "No equipped tool. Select a slot with a tool." });
     return;
@@ -1529,6 +1636,10 @@ app.post("/api/combat/attack-boss", requireAuth, (req: AuthRequest, res: Respons
   }
 
   const player = getOrCreatePlayer(username);
+  if (player.isDead) {
+    res.status(400).json({ error: "You died. Press space to play again." });
+    return;
+  }
   if (!player.equippedTool) {
     res.status(400).json({ error: "No equipped tool. Select a slot with a tool." });
     return;
