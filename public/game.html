@@ -3,84 +3,487 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Game - Sprint 2</title>
+    <title>Game - Sprint 3</title>
     <style>
-      body {
-        font-family: sans-serif;
-        max-width: 760px;
-        margin: 2rem auto;
-        padding: 0 1rem;
-        background: #0a1f44;
-        color: #f0f6ff;
+      :root {
+        --bg: #081833;
+        --panel: rgba(8, 24, 51, 0.86);
+        --accent: #2fd3c8;
+        --text: #eef7ff;
+      }
+      html, body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: radial-gradient(circle at top, #153469, var(--bg));
+        color: var(--text);
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      }
+      #gameCanvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+        touch-action: none;
+      }
+      #hud {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        padding: 10px;
+        background: var(--panel);
+        border: 1px solid #2a588f;
+        border-radius: 8px;
+        max-width: 420px;
+        font-size: 0.92rem;
+        z-index: 10;
+      }
+      #controls {
+        margin-top: 8px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
       }
       button {
-        padding: 0.6rem 1rem;
-        margin-right: 0.5rem;
-        background: #1f4fa3;
-        border: 1px solid #4b74bf;
-        color: #f0f6ff;
-      }
-      pre {
-        margin-top: 1rem;
-        padding: 0.75rem;
-        white-space: pre-wrap;
-        background: #16305f;
-        border: 1px solid #2f4f87;
+        border: 1px solid #2aa79f;
+        background: #114e77;
+        color: var(--text);
+        padding: 6px 10px;
+        border-radius: 6px;
+        cursor: pointer;
       }
       #status {
-        margin-top: 1rem;
+        margin-top: 6px;
+        color: var(--accent);
+      }
+      #touchControls {
+        position: fixed;
+        left: 50%;
+        bottom: 16px;
+        transform: translateX(-50%);
+        display: grid;
+        grid-template-columns: repeat(3, minmax(64px, 88px));
+        grid-template-rows: repeat(2, 52px);
+        gap: 8px;
+        z-index: 12;
+      }
+      .touchBtn {
+        border: 1px solid #2aa79f;
+        background: rgba(17, 78, 119, 0.85);
+        color: var(--text);
+        border-radius: 8px;
+        font-size: 0.9rem;
+        font-weight: 600;
+        touch-action: none;
+        user-select: none;
+      }
+      .touchBtn:active,
+      .touchBtn.active {
+        background: rgba(47, 211, 200, 0.9);
+        color: #03121e;
+      }
+      #touchTurnLeft {
+        grid-column: 1;
+        grid-row: 2;
+      }
+      #touchForward {
+        grid-column: 2;
+        grid-row: 1;
+      }
+      #touchBackward {
+        grid-column: 2;
+        grid-row: 2;
+      }
+      #touchTurnRight {
+        grid-column: 3;
+        grid-row: 2;
+      }
+      @media (max-width: 860px) {
+        #hud {
+          max-width: calc(100% - 24px);
+          font-size: 0.85rem;
+        }
       }
     </style>
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
   </head>
   <body>
-    <h1>Sprint 2 World</h1>
-    <p>This page confirms Start Game joined the world.</p>
-
-    <button id="refreshBtn">Refresh World State</button>
-    <button id="backBtn">Back to Main Page</button>
-    <div id="status"></div>
-    <pre id="worldView"></pre>
+    <div id="hud">
+      <div><strong>Sprint 3 First-Person Preview</strong></div>
+      <div>Move: W/S | Turn: A/D | Look: Mouse drag | Attack nearest: E</div>
+      <div id="playerStats">Loading player...</div>
+      <div id="groupStats">Group: none</div>
+      <div id="status">Starting world...</div>
+      <div id="controls">
+        <button id="refreshBtn">Refresh World</button>
+        <button id="createGroupBtn">Create Group</button>
+        <button id="respawnHydraBtn">Trigger Hydra Respawn</button>
+        <button id="backBtn">Back</button>
+      </div>
+    </div>
+    <div id="touchControls" aria-label="Touch movement controls">
+      <button id="touchForward" class="touchBtn">Forward</button>
+      <button id="touchBackward" class="touchBtn">Back</button>
+      <button id="touchTurnLeft" class="touchBtn">Turn Left</button>
+      <button id="touchTurnRight" class="touchBtn">Turn Right</button>
+    </div>
+    <canvas id="gameCanvas"></canvas>
 
     <script>
-      const statusEl = document.getElementById("status");
-      const worldViewEl = document.getElementById("worldView");
       const token = localStorage.getItem("token");
-
       if (!token) {
-        statusEl.textContent = "Not logged in. Redirecting...";
-        setTimeout(() => (window.location.href = "/"), 700);
+        window.location.href = "/";
       }
 
-      async function refreshWorld() {
-        statusEl.textContent = "Loading world state...";
+      const statusEl = document.getElementById("status");
+      const playerStatsEl = document.getElementById("playerStats");
+      const groupStatsEl = document.getElementById("groupStats");
 
-        try {
-          const response = await fetch("/api/world/state", {
-            headers: { Authorization: `Bearer ${token}` }
-          });
-          const data = await response.json();
-          if (!response.ok) {
-            throw new Error(data.error || "Failed to load world state");
+      const canvas = document.getElementById("gameCanvas");
+      const engine = new BABYLON.Engine(canvas, true);
+      const scene = new BABYLON.Scene(engine);
+      scene.clearColor = new BABYLON.Color4(0.04, 0.09, 0.2, 1);
+
+      const camera = new BABYLON.UniversalCamera("playerCam", new BABYLON.Vector3(0, 2, 0), scene);
+      camera.speed = 0;
+      camera.angularSensibility = 3000;
+      camera.minZ = 0.1;
+      camera.keysUp = [];
+      camera.keysDown = [];
+      camera.keysLeft = [];
+      camera.keysRight = [];
+      camera.attachControl(canvas, true);
+
+      const hemi = new BABYLON.HemisphericLight("hemi", new BABYLON.Vector3(0, 1, 0), scene);
+      hemi.intensity = 0.85;
+
+      const dir = new BABYLON.DirectionalLight("sun", new BABYLON.Vector3(-0.5, -1, 0.5), scene);
+      dir.position = new BABYLON.Vector3(30, 50, -30);
+
+      const ground = BABYLON.MeshBuilder.CreateGround("ground", { width: 2400, height: 2400 }, scene);
+      const groundMat = new BABYLON.StandardMaterial("groundMat", scene);
+      groundMat.diffuseColor = new BABYLON.Color3(0.14, 0.22, 0.17);
+      ground.material = groundMat;
+
+      const sky = BABYLON.MeshBuilder.CreateSphere("sky", { diameter: 6000, segments: 16 }, scene);
+      const skyMat = new BABYLON.StandardMaterial("skyMat", scene);
+      skyMat.backFaceCulling = false;
+      skyMat.disableLighting = true;
+      skyMat.diffuseColor = new BABYLON.Color3(0.07, 0.15, 0.35);
+      sky.material = skyMat;
+
+      const enemyMeshes = new Map();
+      const bossMeshes = new Map();
+
+      let worldState = null;
+      let movePushCooldown = 0;
+      let movedSinceLastPush = false;
+
+      const inputState = {
+        forward: false,
+        backward: false,
+        turnLeft: false,
+        turnRight: false
+      };
+
+      const MOVE_SPEED = 22;
+      const TURN_SPEED = 2.2;
+
+      function setStatus(text) {
+        statusEl.textContent = text;
+      }
+
+      function upsertEnemyMesh(enemy) {
+        let mesh = enemyMeshes.get(enemy.id);
+        if (!mesh) {
+          mesh = BABYLON.MeshBuilder.CreateBox(enemy.id, { size: 8 }, scene);
+          const mat = new BABYLON.StandardMaterial(`mat-${enemy.id}`, scene);
+          mat.diffuseColor = new BABYLON.Color3(0.9, 0.2, 0.2);
+          mesh.material = mat;
+          enemyMeshes.set(enemy.id, mesh);
+        }
+        mesh.position.x = enemy.x;
+        mesh.position.y = 4;
+        mesh.position.z = enemy.y;
+      }
+
+      function upsertBossMesh(boss) {
+        let mesh = bossMeshes.get(boss.id);
+        if (!mesh) {
+          const isHydra = boss.id.includes("hydra");
+          mesh = BABYLON.MeshBuilder.CreateCylinder(
+            boss.id,
+            { diameterTop: isHydra ? 18 : 14, diameterBottom: isHydra ? 22 : 16, height: 16 },
+            scene
+          );
+          const mat = new BABYLON.StandardMaterial(`boss-mat-${boss.id}`, scene);
+          mat.diffuseColor = isHydra
+            ? new BABYLON.Color3(0.1, 0.8, 0.45)
+            : new BABYLON.Color3(0.75, 0.7, 0.2);
+          mesh.material = mat;
+          bossMeshes.set(boss.id, mesh);
+        }
+        mesh.position.x = boss.x;
+        mesh.position.y = 8;
+        mesh.position.z = boss.y;
+      }
+
+      function cleanupMissingMeshes(liveEnemies, liveBosses) {
+        const liveEnemyIds = new Set(liveEnemies.map((e) => e.id));
+        for (const [id, mesh] of enemyMeshes) {
+          if (!liveEnemyIds.has(id)) {
+            mesh.dispose();
+            enemyMeshes.delete(id);
           }
+        }
 
-          worldViewEl.textContent = JSON.stringify(data, null, 2);
-          statusEl.textContent = `Player ${data.player.username} at (${data.player.x}, ${data.player.y}) | XP ${data.player.xp} | Gold ${data.player.gold}`;
-        } catch (error) {
-          statusEl.textContent = `World load failed: ${error.message}`;
+        const liveBossIds = new Set(liveBosses.map((b) => b.id));
+        for (const [id, mesh] of bossMeshes) {
+          if (!liveBossIds.has(id)) {
+            mesh.dispose();
+            bossMeshes.delete(id);
+          }
         }
       }
 
-      const cachedWorld = localStorage.getItem("lastWorldState");
-      if (cachedWorld) {
-        worldViewEl.textContent = cachedWorld;
+      function renderWorldState(data) {
+        worldState = data;
+        const player = data.player;
+        camera.position.x = player.x;
+        camera.position.z = player.y;
+        playerStatsEl.textContent = `Player ${player.username} | XP ${player.xp} | Gold ${player.gold}`;
+
+        const group = data.group;
+        groupStatsEl.textContent = group
+          ? `Group ${group.id} (${group.members.join(", ")})`
+          : "Group: none";
+
+        for (const enemy of data.enemies) {
+          upsertEnemyMesh(enemy);
+        }
+        for (const boss of data.bosses || []) {
+          upsertBossMesh(boss);
+        }
+        cleanupMissingMeshes(data.enemies, data.bosses || []);
+
+        setStatus(`Sections active: ${data.activeSections.length} | Enemies: ${data.enemies.length} | Bosses: ${(data.bosses || []).length}`);
       }
 
+      async function api(path, method = "GET", body = null) {
+        const response = await fetch(path, {
+          method,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`
+          },
+          body: body ? JSON.stringify(body) : undefined
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || `Request failed: ${path}`);
+        }
+        return data;
+      }
+
+      async function refreshWorld() {
+        try {
+          const data = await api("/api/world/state");
+          renderWorldState(data);
+        } catch (error) {
+          setStatus(`Refresh failed: ${error.message}`);
+        }
+      }
+
+      async function pushMovement() {
+        if (movePushCooldown > Date.now()) {
+          return;
+        }
+        movePushCooldown = Date.now() + 250;
+
+        try {
+          const data = await api("/api/world/move", "POST", {
+            x: camera.position.x,
+            y: camera.position.z
+          });
+          renderWorldState(data);
+        } catch (error) {
+          setStatus(`Move rejected: ${error.message}`);
+        }
+      }
+
+      function setControlState(controlName, isPressed) {
+        inputState[controlName] = isPressed;
+      }
+
+      function registerHoldButton(buttonId, controlName) {
+        const btn = document.getElementById(buttonId);
+        const press = (event) => {
+          event.preventDefault();
+          setControlState(controlName, true);
+          btn.classList.add("active");
+        };
+        const release = (event) => {
+          event.preventDefault();
+          setControlState(controlName, false);
+          btn.classList.remove("active");
+        };
+
+        btn.addEventListener("pointerdown", press);
+        btn.addEventListener("pointerup", release);
+        btn.addEventListener("pointercancel", release);
+        btn.addEventListener("pointerleave", release);
+      }
+
+      function updateMovement() {
+        const deltaTime = engine.getDeltaTime() / 1000;
+        let didMove = false;
+
+        if (inputState.turnLeft) {
+          camera.rotation.y -= TURN_SPEED * deltaTime;
+          didMove = true;
+        }
+        if (inputState.turnRight) {
+          camera.rotation.y += TURN_SPEED * deltaTime;
+          didMove = true;
+        }
+
+        const moveDirection =
+          (inputState.forward ? 1 : 0) +
+          (inputState.backward ? -1 : 0);
+        if (moveDirection !== 0) {
+          const yaw = camera.rotation.y;
+          const forwardVector = new BABYLON.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+          const moveAmount = moveDirection * MOVE_SPEED * deltaTime;
+          camera.position.x += forwardVector.x * moveAmount;
+          camera.position.z += forwardVector.z * moveAmount;
+          didMove = true;
+        }
+
+        if (didMove) {
+          movedSinceLastPush = true;
+        }
+      }
+
+      async function attackNearestTarget() {
+        if (!worldState) {
+          return;
+        }
+
+        const player = worldState.player;
+        const enemies = worldState.enemies || [];
+        const bosses = worldState.bosses || [];
+
+        let nearestEnemy = null;
+        let nearestEnemyDist = Number.POSITIVE_INFINITY;
+        for (const enemy of enemies) {
+          const d = Math.hypot(player.x - enemy.x, player.y - enemy.y);
+          if (d < nearestEnemyDist) {
+            nearestEnemyDist = d;
+            nearestEnemy = enemy;
+          }
+        }
+
+        let nearestBoss = null;
+        let nearestBossDist = Number.POSITIVE_INFINITY;
+        for (const boss of bosses) {
+          const d = Math.hypot(player.x - boss.x, player.y - boss.y);
+          if (d < nearestBossDist) {
+            nearestBossDist = d;
+            nearestBoss = boss;
+          }
+        }
+
+        try {
+          if (nearestBoss && nearestBossDist < nearestEnemyDist) {
+            const data = await api("/api/combat/attack-boss", "POST", { bossId: nearestBoss.id });
+            renderWorldState(data);
+            setStatus(data.message);
+          } else if (nearestEnemy) {
+            const data = await api("/api/combat/attack", "POST", { enemyId: nearestEnemy.id });
+            renderWorldState(data);
+            setStatus(data.message);
+          } else {
+            setStatus("No visible targets to attack.");
+          }
+        } catch (error) {
+          setStatus(`Attack failed: ${error.message}`);
+        }
+      }
+
+      scene.onKeyboardObservable.add((kbInfo) => {
+        const key = kbInfo.event.key.toLowerCase();
+        const isDown = kbInfo.type === BABYLON.KeyboardEventTypes.KEYDOWN;
+
+        if (key === "w") {
+          setControlState("forward", isDown);
+        } else if (key === "s") {
+          setControlState("backward", isDown);
+        } else if (key === "a") {
+          setControlState("turnLeft", isDown);
+        } else if (key === "d") {
+          setControlState("turnRight", isDown);
+        } else if (key === "e" && isDown) {
+          attackNearestTarget();
+        }
+      });
+
+      scene.onBeforeRenderObservable.add(() => {
+        updateMovement();
+      });
+
+      scene.onAfterRenderObservable.add(() => {
+        if (movedSinceLastPush) {
+          movedSinceLastPush = false;
+          pushMovement();
+        }
+      });
+
+      registerHoldButton("touchForward", "forward");
+      registerHoldButton("touchBackward", "backward");
+      registerHoldButton("touchTurnLeft", "turnLeft");
+      registerHoldButton("touchTurnRight", "turnRight");
+
       document.getElementById("refreshBtn").addEventListener("click", refreshWorld);
+      document.getElementById("createGroupBtn").addEventListener("click", async () => {
+        try {
+          const data = await api("/api/group/create", "POST", {});
+          groupStatsEl.textContent = `Group ${data.group.id} (${data.group.members.join(", ")})`;
+          setStatus("Group created.");
+        } catch (error) {
+          setStatus(`Group create failed: ${error.message}`);
+        }
+      });
+      document.getElementById("respawnHydraBtn").addEventListener("click", async () => {
+        try {
+          const data = await api("/api/bosses/hidden-respawn", "POST", { bossId: "boss-hydra" });
+          setStatus(data.message);
+          refreshWorld();
+        } catch (error) {
+          setStatus(`Respawn failed: ${error.message}`);
+        }
+      });
       document.getElementById("backBtn").addEventListener("click", () => {
         window.location.href = "/main.html";
       });
 
-      refreshWorld();
+      window.addEventListener("resize", () => {
+        engine.resize();
+      });
+
+      async function boot() {
+        try {
+          await api("/api/world/join", "POST", { x: 0, y: 0 });
+          await refreshWorld();
+          engine.runRenderLoop(() => {
+            scene.render();
+          });
+        } catch (error) {
+          setStatus(`Startup failed: ${error.message}`);
+        }
+      }
+
+      boot();
     </script>
   </body>
 </html>

@@ -25,6 +25,7 @@ type PlayerState = {
   y: number;
   xp: number;
   gold: number;
+  groupId: string | null;
 };
 
 type Section = {
@@ -43,6 +44,27 @@ type EnemyState = {
   isAlive: boolean;
 };
 
+type BossState = {
+  id: string;
+  name: string;
+  structureName: string;
+  sectionKey: string;
+  x: number;
+  y: number;
+  health: number;
+  maxHealth: number;
+  isAlive: boolean;
+  respawnMs: number;
+  triggerX: number;
+  triggerY: number;
+};
+
+type GroupState = {
+  id: string;
+  leader: string;
+  members: string[];
+};
+
 const PORT = Number(process.env.PORT ?? 3000);
 const MASTER_PASSCODE = process.env.MASTER_PASSCODE ?? "family-server-123";
 const JWT_SECRET = process.env.JWT_SECRET ?? "change-this-secret";
@@ -58,6 +80,11 @@ const ATTACK_DAMAGE = 25;
 const KILL_XP_REWARD = 25;
 const KILL_GOLD_REWARD = 10;
 const ENEMY_RESPAWN_MS = 10000;
+const BOSS_ATTACK_DAMAGE = 30;
+const BOSS_ATTACK_RANGE = 25;
+const BOSS_KILL_XP_REWARD = 200;
+const BOSS_KILL_GOLD_REWARD = 120;
+const BOSS_TRIGGER_RANGE = 100;
 
 const rawUsers = [
   {
@@ -79,6 +106,9 @@ const users: UserRecord[] = rawUsers.map((u) => ({
 const players = new Map<string, PlayerState>();
 const sections = new Map<string, Section>();
 const enemies = new Map<string, EnemyState>();
+const bosses = new Map<string, BossState>();
+const groups = new Map<string, GroupState>();
+let groupCounter = 1;
 
 function toSectionKey(gridX: number, gridY: number): string {
   return `${gridX}:${gridY}`;
@@ -90,6 +120,12 @@ function clamp(value: number, min: number, max: number): number {
 
 function distance(a: Vec2, b: Vec2): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function getSectionKeyForPosition(x: number, y: number): string {
+  const gridX = Math.floor(x / SECTION_SIZE);
+  const gridY = Math.floor(y / SECTION_SIZE);
+  return toSectionKey(gridX, gridY);
 }
 
 function createWorld(): void {
@@ -132,13 +168,64 @@ function createWorld(): void {
 
 createWorld();
 
+function createBosses(): void {
+  const seedBosses = [
+    {
+      id: "boss-hydra",
+      name: "Hydra",
+      structureName: "Hydra Lake",
+      x: 360,
+      y: 340,
+      maxHealth: 800,
+      respawnMs: 45000,
+      triggerX: 420,
+      triggerY: 300
+    },
+    {
+      id: "boss-cyclops",
+      name: "Cave Cyclops",
+      structureName: "Cyclops Cave",
+      x: -430,
+      y: -320,
+      maxHealth: 950,
+      respawnMs: 60000,
+      triggerX: -500,
+      triggerY: -260
+    }
+  ];
+
+  for (const boss of seedBosses) {
+    const sectionKey = getSectionKeyForPosition(boss.x, boss.y);
+    if (!sections.has(sectionKey)) {
+      continue;
+    }
+
+    bosses.set(boss.id, {
+      id: boss.id,
+      name: boss.name,
+      structureName: boss.structureName,
+      sectionKey,
+      x: boss.x,
+      y: boss.y,
+      health: boss.maxHealth,
+      maxHealth: boss.maxHealth,
+      isAlive: true,
+      respawnMs: boss.respawnMs,
+      triggerX: boss.triggerX,
+      triggerY: boss.triggerY
+    });
+  }
+}
+
+createBosses();
+
 function getOrCreatePlayer(username: string): PlayerState {
   const existing = players.get(username);
   if (existing) {
     return existing;
   }
 
-  const created: PlayerState = { username, x: 0, y: 0, xp: 0, gold: 0 };
+  const created: PlayerState = { username, x: 0, y: 0, xp: 0, gold: 0, groupId: null };
   players.set(username, created);
   return created;
 }
@@ -179,17 +266,69 @@ function getVisibleEnemies(activeSectionKeys: string[]): EnemyState[] {
   return visible;
 }
 
+function getVisibleBosses(activeSectionKeys: string[]): BossState[] {
+  const activeSet = new Set(activeSectionKeys);
+  const visible: BossState[] = [];
+
+  for (const boss of bosses.values()) {
+    if (!boss.isAlive) {
+      continue;
+    }
+    if (!activeSet.has(boss.sectionKey)) {
+      continue;
+    }
+    visible.push(boss);
+  }
+
+  return visible;
+}
+
+function getGroupForPlayer(username: string): GroupState | null {
+  for (const group of groups.values()) {
+    if (group.members.includes(username)) {
+      return group;
+    }
+  }
+  return null;
+}
+
+function removePlayerFromGroup(username: string): void {
+  const group = getGroupForPlayer(username);
+  if (!group) {
+    return;
+  }
+
+  group.members = group.members.filter((member) => member !== username);
+  const player = players.get(username);
+  if (player) {
+    player.groupId = null;
+  }
+
+  if (group.members.length === 0) {
+    groups.delete(group.id);
+    return;
+  }
+
+  if (!group.members.includes(group.leader)) {
+    group.leader = group.members[0];
+  }
+}
+
 function buildWorldState(username: string): {
   player: PlayerState;
   activeSections: string[];
   enemies: EnemyState[];
+  bosses: BossState[];
+  group: GroupState | null;
 } {
   const player = getOrCreatePlayer(username);
   const activeSections = getPlayerActiveSectionKeys(player);
   return {
     player,
     activeSections,
-    enemies: getVisibleEnemies(activeSections)
+    enemies: getVisibleEnemies(activeSections),
+    bosses: getVisibleBosses(activeSections),
+    group: getGroupForPlayer(username)
   };
 }
 
@@ -209,6 +348,16 @@ function respawnEnemy(enemyId: string): void {
   enemy.y = clamp(section.center.y + offsetY, -WORLD_LIMIT, WORLD_LIMIT);
   enemy.health = enemy.maxHealth;
   enemy.isAlive = true;
+}
+
+function respawnBoss(bossId: string): void {
+  const boss = bosses.get(bossId);
+  if (!boss) {
+    return;
+  }
+
+  boss.health = boss.maxHealth;
+  boss.isAlive = true;
 }
 
 function tickActiveEnemies(): void {
@@ -372,6 +521,92 @@ app.post("/api/world/move", requireAuth, (req: AuthRequest, res: Response) => {
   res.json({ message: "Move accepted", ...buildWorldState(username) });
 });
 
+app.post("/api/group/create", requireAuth, (req: AuthRequest, res: Response) => {
+  const username = req.user?.username;
+  if (!username) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  getOrCreatePlayer(username);
+  removePlayerFromGroup(username);
+
+  const groupId = `group-${groupCounter}`;
+  groupCounter += 1;
+  const group: GroupState = {
+    id: groupId,
+    leader: username,
+    members: [username]
+  };
+
+  groups.set(groupId, group);
+  const player = getOrCreatePlayer(username);
+  player.groupId = groupId;
+
+  res.json({ message: "Group created", group });
+});
+
+app.post("/api/group/join", requireAuth, (req: AuthRequest, res: Response) => {
+  const username = req.user?.username;
+  if (!username) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const groupId = String(req.body?.groupId ?? "");
+  if (!groupId) {
+    res.status(400).json({ error: "groupId is required" });
+    return;
+  }
+
+  const group = groups.get(groupId);
+  if (!group) {
+    res.status(404).json({ error: "Group not found" });
+    return;
+  }
+
+  removePlayerFromGroup(username);
+  if (!group.members.includes(username)) {
+    group.members.push(username);
+  }
+
+  const player = getOrCreatePlayer(username);
+  player.groupId = group.id;
+  res.json({ message: "Joined group", group });
+});
+
+app.post("/api/group/leave", requireAuth, (req: AuthRequest, res: Response) => {
+  const username = req.user?.username;
+  if (!username) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  removePlayerFromGroup(username);
+  res.json({ message: "Left group", group: null });
+});
+
+app.get("/api/group/state", requireAuth, (req: AuthRequest, res: Response) => {
+  const username = req.user?.username;
+  if (!username) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  res.json({ group: getGroupForPlayer(username) });
+});
+
+app.get("/api/world/bosses", requireAuth, (req: AuthRequest, res: Response) => {
+  const username = req.user?.username;
+  if (!username) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const state = buildWorldState(username);
+  res.json({ bosses: state.bosses });
+});
+
 app.post("/api/combat/attack", requireAuth, (req: AuthRequest, res: Response) => {
   const username = req.user?.username;
   if (!username) {
@@ -426,8 +661,101 @@ app.post("/api/combat/attack", requireAuth, (req: AuthRequest, res: Response) =>
   });
 });
 
+app.post("/api/combat/attack-boss", requireAuth, (req: AuthRequest, res: Response) => {
+  const username = req.user?.username;
+  if (!username) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const player = getOrCreatePlayer(username);
+  const bossId = String(req.body?.bossId ?? "");
+  if (!bossId) {
+    res.status(400).json({ error: "bossId is required" });
+    return;
+  }
+
+  const boss = bosses.get(bossId);
+  if (!boss || !boss.isAlive) {
+    res.status(404).json({ error: "Boss not found or already defeated" });
+    return;
+  }
+
+  const range = distance({ x: player.x, y: player.y }, { x: boss.x, y: boss.y });
+  if (range > BOSS_ATTACK_RANGE) {
+    res.status(400).json({
+      error: `Boss is out of range. Move closer than ${BOSS_ATTACK_RANGE} feet.`
+    });
+    return;
+  }
+
+  boss.health = Math.max(0, boss.health - BOSS_ATTACK_DAMAGE);
+  let defeated = false;
+  if (boss.health === 0) {
+    defeated = true;
+    boss.isAlive = false;
+    player.xp += BOSS_KILL_XP_REWARD;
+    player.gold += BOSS_KILL_GOLD_REWARD;
+
+    setTimeout(() => {
+      respawnBoss(boss.id);
+    }, boss.respawnMs);
+  }
+
+  res.json({
+    message: defeated ? `${boss.name} defeated` : "Boss hit landed",
+    combat: {
+      bossId: boss.id,
+      bossName: boss.name,
+      bossHealth: boss.health,
+      damage: BOSS_ATTACK_DAMAGE,
+      defeated,
+      rewards: defeated ? { xp: BOSS_KILL_XP_REWARD, gold: BOSS_KILL_GOLD_REWARD } : null,
+      autoRespawnMs: boss.respawnMs
+    },
+    ...buildWorldState(username)
+  });
+});
+
+app.post("/api/bosses/hidden-respawn", requireAuth, (req: AuthRequest, res: Response) => {
+  const username = req.user?.username;
+  if (!username) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const player = getOrCreatePlayer(username);
+  const bossId = String(req.body?.bossId ?? "");
+  if (!bossId) {
+    res.status(400).json({ error: "bossId is required" });
+    return;
+  }
+
+  const boss = bosses.get(bossId);
+  if (!boss) {
+    res.status(404).json({ error: "Boss not found" });
+    return;
+  }
+
+  const triggerDistance = distance(
+    { x: player.x, y: player.y },
+    { x: boss.triggerX, y: boss.triggerY }
+  );
+  if (triggerDistance > BOSS_TRIGGER_RANGE) {
+    res.status(400).json({
+      error: `You are too far from the hidden trigger. Move within ${BOSS_TRIGGER_RANGE} feet.`
+    });
+    return;
+  }
+
+  respawnBoss(boss.id);
+  res.json({ message: `${boss.name} manually respawned`, boss });
+});
+
 app.listen(PORT, () => {
-  console.log(`Sprint 2 server running at http://localhost:${PORT}`);
+  console.log(`Sprint 3 server running at http://localhost:${PORT}`);
   console.log("Health check: GET /api/health");
   console.log("Join world: POST /api/world/join");
+  console.log("Boss combat: POST /api/combat/attack-boss");
+  console.log("Groups: POST /api/group/create");
 });

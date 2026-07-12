@@ -11,7 +11,7 @@
 ## 1.1 Sprint Summary (Quick View)
 - Sprint 1 does: Setup project, run local server, and add login + master passcode flow.
 - Sprint 2 does: Build section loading (300 feet), enemies, combat, and XP/gold rewards.
-- Sprint 3 does: Add Hydra/Cyclops bosses, respawn logic, and in-map group joining.
+- Sprint 3 does: Add Hydra/Cyclops bosses, respawn logic, in-map group joining, and first-person 3D browser preview.
 - Sprint 4 does: Build main page, Start Game button, bug reports, and News page/admin news posts.
 - Sprint 5 does: Add admin tools (kick/ban), rate limits, logs, and device input testing.
 
@@ -138,6 +138,7 @@
   - Add Hydra and Cave Cyclops boss encounters.
   - Add automatic boss respawn cooldown and hidden-button respawn.
   - Add in-map group joining.
+  - Add first-person 3D browser preview client wired to world and combat APIs.
   - Success check: Group can defeat a boss and receive big rewards (more xp and gold).
 
 - Sprint 4: Main Page, News, and Reports
