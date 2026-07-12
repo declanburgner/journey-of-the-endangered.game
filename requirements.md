@@ -64,6 +64,8 @@
 
 ## 7. Authentication and Access Control
 - Require a master server passcode for private server entry.
+- Temporary default passcodes are allowed during early testing, but the final master passcode must be set by the admin user (you) when you choose to do so.
+- Add a planned passcode setup step that can be triggered later on command, so the admin can create the real passcode before wider testing/release.
 - Require account login with username and password.
 - Store passwords using secure hashing (Argon2id preferred, bcrypt acceptable fallback).
 - Include login/session timeout behavior.
@@ -133,7 +135,7 @@
   - Add Hydra and Cave Cyclops boss encounters.
   - Add automatic boss respawn cooldown and hidden-button respawn.
   - Add in-map group joining.
-  - Success check: Group can defeat a boss and receive rewards.
+  - Success check: Group can defeat a boss and receive big rewards (more xp and gold).
 
 - Sprint 4: Main Page, News, and Reports
   - Add Start Game button on main page.

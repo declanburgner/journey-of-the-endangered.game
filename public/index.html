@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Login - Sprint 1</title>
+    <style>
+      body { font-family: sans-serif; max-width: 520px; margin: 2rem auto; padding: 0 1rem; }
+      label { display: block; margin-top: 0.75rem; }
+      input { width: 100%; padding: 0.5rem; }
+      button { margin-top: 1rem; padding: 0.6rem 1rem; }
+      #status { margin-top: 1rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Sprint 1 Login</h1>
+    <p>Enter the master passcode and your user login.</p>
+
+    <label>Master Passcode</label>
+    <input id="masterPasscode" type="password" />
+
+    <label>Username</label>
+    <input id="username" type="text" />
+
+    <label>Password</label>
+    <input id="password" type="password" />
+
+    <button id="loginBtn">Login</button>
+    <div id="status"></div>
+
+    <script>
+      const statusEl = document.getElementById("status");
+      document.getElementById("loginBtn").addEventListener("click", async () => {
+        const masterPasscode = document.getElementById("masterPasscode").value;
+        const username = document.getElementById("username").value;
+        const password = document.getElementById("password").value;
+
+        statusEl.textContent = "Logging in...";
+
+        const response = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ masterPasscode, username, password })
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          statusEl.textContent = data.error || "Login failed";
+          return;
+        }
+
+        localStorage.setItem("token", data.token);
+        window.location.href = "/main.html";
+      });
+    </script>
+  </body>
+</html>

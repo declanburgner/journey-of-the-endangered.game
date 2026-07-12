@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Main Page - Sprint 1</title>
+    <style>
+      body { font-family: sans-serif; max-width: 700px; margin: 2rem auto; padding: 0 1rem; }
+      button { padding: 0.6rem 1rem; margin-right: 0.5rem; }
+      #status { margin-top: 1rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Main Page</h1>
+    <p>You are here only after correct passcodes and login.</p>
+    <button>Start Game</button>
+    <button>News</button>
+    <div id="status"></div>
+
+    <script>
+      const statusEl = document.getElementById("status");
+      const token = localStorage.getItem("token");
+
+      if (!token) {
+        statusEl.textContent = "Not logged in. Redirecting...";
+        setTimeout(() => (window.location.href = "/"), 700);
+      } else {
+        fetch("/api/main", {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+          .then(async (response) => {
+            const data = await response.json();
+            if (!response.ok) {
+              throw new Error(data.error || "Auth failed");
+            }
+            statusEl.textContent = data.message;
+          })
+          .catch((error) => {
+            statusEl.textContent = `Access denied: ${error.message}`;
+            setTimeout(() => (window.location.href = "/"), 1000);
+          });
+      }
+    </script>
+  </body>
+</html>
