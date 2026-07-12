@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Main Page - Sprint 2</title>
+    <title>Main Page - Sprint 4</title>
     <style>
       body {
         font-family: sans-serif;
@@ -21,13 +21,48 @@
         color: #f0f6ff;
       }
       #status { margin-top: 1rem; }
+      .report-box {
+        margin-top: 1rem;
+        padding: 0.75rem;
+        border: 1px solid #2f4f87;
+        background: #102751;
+      }
+      .report-box label {
+        display: block;
+        margin-top: 0.5rem;
+      }
+      .report-box input,
+      .report-box textarea,
+      .report-box select {
+        width: 100%;
+        padding: 0.5rem;
+        margin-top: 0.25rem;
+        background: #16305f;
+        border: 1px solid #2f4f87;
+        color: #f0f6ff;
+      }
     </style>
   </head>
   <body>
-    <h1>Main Page - Sprint 2</h1>
+    <h1>Main Page - Sprint 4</h1>
     <p>You are here only after correct passcodes and login.</p>
     <button id="startGameBtn">Start Game</button>
     <button id="newsBtn">News</button>
+    <button id="submitReportBtn">Submit Report</button>
+
+    <div class="report-box">
+      <strong>Bug/Player Report</strong>
+      <label for="reportType">Report Type</label>
+      <select id="reportType">
+        <option value="bug">Bug</option>
+        <option value="player">Player</option>
+      </select>
+      <label for="reportedUser">Reported Player (optional for bug reports)</label>
+      <input id="reportedUser" type="text" placeholder="player username" />
+      <label for="reportReason">Reason</label>
+      <textarea id="reportReason" rows="3" placeholder="Describe the issue"></textarea>
+    </div>
+
     <div id="status"></div>
 
     <script>
@@ -35,6 +70,10 @@
       const token = localStorage.getItem("token");
       const startGameBtn = document.getElementById("startGameBtn");
       const newsBtn = document.getElementById("newsBtn");
+      const submitReportBtn = document.getElementById("submitReportBtn");
+      const reportTypeEl = document.getElementById("reportType");
+      const reportedUserEl = document.getElementById("reportedUser");
+      const reportReasonEl = document.getElementById("reportReason");
 
       if (!token) {
         statusEl.textContent = "Not logged in. Redirecting...";
@@ -49,6 +88,9 @@
               throw new Error(data.error || "Auth failed");
             }
             statusEl.textContent = data.message;
+            if (data.role) {
+              localStorage.setItem("role", data.role);
+            }
           })
           .catch((error) => {
             statusEl.textContent = `Access denied: ${error.message}`;
@@ -83,7 +125,51 @@
         });
 
         newsBtn.addEventListener("click", () => {
-          statusEl.textContent = "News page is planned for Sprint 4.";
+          window.location.href = "/news.html";
+        });
+
+        submitReportBtn.addEventListener("click", async () => {
+          const reason = reportReasonEl.value.trim();
+          const source = reportTypeEl.value;
+          const reportedUser = reportedUserEl.value.trim();
+
+          if (!reason) {
+            statusEl.textContent = "Please enter a reason for the report.";
+            return;
+          }
+
+          submitReportBtn.disabled = true;
+          statusEl.textContent = "Submitting report...";
+
+          try {
+            const response = await fetch("/api/reports", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`
+              },
+              body: JSON.stringify({
+                reason,
+                source,
+                reportedUser: source === "player" ? reportedUser : undefined
+              })
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+              throw new Error(data.error || "Report failed");
+            }
+
+            statusEl.textContent = "Report submitted. It is now visible in News.";
+            reportReasonEl.value = "";
+            if (source !== "player") {
+              reportedUserEl.value = "";
+            }
+          } catch (error) {
+            statusEl.textContent = `Report failed: ${error.message}`;
+          } finally {
+            submitReportBtn.disabled = false;
+          }
         });
       }
     </script>

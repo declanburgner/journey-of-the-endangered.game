@@ -12,7 +12,7 @@
 - Sprint 1 does: Setup project, run local server, and add login + master passcode flow.
 - Sprint 2 does: Build section loading (300 feet), enemies, combat, and XP/gold rewards.
 - Sprint 3 does: Add Hydra/Cyclops bosses, respawn logic, in-map group joining, and first-person 3D browser preview.
-- Sprint 4 does: Build main page, Start Game button, bug reports, and News page/admin news posts.
+- Sprint 4 does: Build main page report flow, News page, admin news posting, and report event feed.
 - Sprint 5 does: Add admin tools (kick/ban), rate limits, logs, and device input testing.
 
 ## 2. Core Technology

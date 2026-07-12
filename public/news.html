@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>News - Sprint 4</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        max-width: 900px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        background: #0a1f44;
+        color: #f0f6ff;
+      }
+      button {
+        padding: 0.6rem 1rem;
+        margin-right: 0.5rem;
+        background: #1f4fa3;
+        border: 1px solid #4b74bf;
+        color: #f0f6ff;
+      }
+      .panel {
+        margin-top: 1rem;
+        padding: 0.8rem;
+        border: 1px solid #2f4f87;
+        background: #102751;
+      }
+      .item {
+        margin-top: 0.75rem;
+        padding: 0.75rem;
+        border: 1px solid #2f4f87;
+        background: #0d2144;
+      }
+      .meta {
+        color: #96b6ef;
+        font-size: 0.88rem;
+      }
+      input,
+      textarea {
+        width: 100%;
+        padding: 0.5rem;
+        margin-top: 0.25rem;
+        background: #16305f;
+        border: 1px solid #2f4f87;
+        color: #f0f6ff;
+      }
+      #status {
+        margin-top: 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>News Feed - Sprint 4</h1>
+    <p>All users can view news and reports. Admin can post news updates.</p>
+
+    <button id="refreshBtn">Refresh Feed</button>
+    <button id="backBtn">Back to Main</button>
+    <div id="status"></div>
+
+    <div id="adminPanel" class="panel" style="display:none;">
+      <strong>Admin News Post</strong>
+      <label for="newsTitle">Title</label>
+      <input id="newsTitle" type="text" placeholder="Update title" />
+      <label for="newsBody">Body</label>
+      <textarea id="newsBody" rows="4" placeholder="Write your news post"></textarea>
+      <button id="publishBtn">Publish</button>
+    </div>
+
+    <div id="feedPanel" class="panel">
+      <strong>Feed</strong>
+      <div id="feedItems"></div>
+    </div>
+
+    <script>
+      const token = localStorage.getItem("token");
+      if (!token) {
+        window.location.href = "/";
+      }
+
+      const statusEl = document.getElementById("status");
+      const feedItemsEl = document.getElementById("feedItems");
+      const adminPanelEl = document.getElementById("adminPanel");
+      const newsTitleEl = document.getElementById("newsTitle");
+      const newsBodyEl = document.getElementById("newsBody");
+      const publishBtn = document.getElementById("publishBtn");
+
+      async function api(path, method = "GET", body = null) {
+        const response = await fetch(path, {
+          method,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`
+          },
+          body: body ? JSON.stringify(body) : undefined
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || `Request failed: ${path}`);
+        }
+        return data;
+      }
+
+      function formatTime(timestamp) {
+        return new Date(timestamp).toLocaleString();
+      }
+
+      function renderFeed(feed) {
+        if (!Array.isArray(feed) || feed.length === 0) {
+          feedItemsEl.innerHTML = "<div class=\"item\">No news yet.</div>";
+          return;
+        }
+
+        feedItemsEl.innerHTML = feed
+          .map((item) => {
+            if (item.type === "report") {
+              return `
+                <div class="item">
+                  <div><strong>Report Event</strong> (${item.source})</div>
+                  <div class="meta">Time: ${formatTime(item.timestamp)}</div>
+                  <div class="meta">Reporter: ${item.reporter}</div>
+                  <div class="meta">Reported User: ${item.reportedUser}</div>
+                  <div>Reason: ${item.reason}</div>
+                </div>
+              `;
+            }
+
+            return `
+              <div class="item">
+                <div><strong>${item.title}</strong></div>
+                <div class="meta">By ${item.author} at ${formatTime(item.timestamp)}</div>
+                <div>${item.body}</div>
+              </div>
+            `;
+          })
+          .join("");
+      }
+
+      async function refreshFeed() {
+        statusEl.textContent = "Loading feed...";
+
+        try {
+          const data = await api("/api/news");
+          adminPanelEl.style.display = data.isAdmin ? "block" : "none";
+          renderFeed(data.feed);
+          statusEl.textContent = data.isAdmin
+            ? `Feed loaded. You are admin (${data.adminUser}).`
+            : "Feed loaded.";
+        } catch (error) {
+          statusEl.textContent = `Feed load failed: ${error.message}`;
+        }
+      }
+
+      publishBtn.addEventListener("click", async () => {
+        const title = newsTitleEl.value.trim();
+        const body = newsBodyEl.value.trim();
+
+        if (!title || !body) {
+          statusEl.textContent = "Title and body are required.";
+          return;
+        }
+
+        publishBtn.disabled = true;
+        statusEl.textContent = "Publishing news...";
+        try {
+          await api("/api/news", "POST", { title, body });
+          newsTitleEl.value = "";
+          newsBodyEl.value = "";
+          statusEl.textContent = "News published.";
+          await refreshFeed();
+        } catch (error) {
+          statusEl.textContent = `Publish failed: ${error.message}`;
+        } finally {
+          publishBtn.disabled = false;
+        }
+      });
+
+      document.getElementById("refreshBtn").addEventListener("click", refreshFeed);
+      document.getElementById("backBtn").addEventListener("click", () => {
+        window.location.href = "/main.html";
+      });
+
+      refreshFeed();
+    </script>
+  </body>
+</html>

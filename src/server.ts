@@ -17,6 +17,8 @@ type UserRecord = {
   passwordHash: string;
 };
 
+type UserRole = "admin" | "player";
+
 type Vec2 = { x: number; y: number };
 
 type PlayerState = {
@@ -65,9 +67,27 @@ type GroupState = {
   members: string[];
 };
 
+type NewsPost = {
+  id: string;
+  title: string;
+  body: string;
+  author: string;
+  timestamp: number;
+};
+
+type ReportEvent = {
+  id: string;
+  reporter: string;
+  reportedUser: string;
+  reason: string;
+  source: "bug" | "player";
+  timestamp: number;
+};
+
 const PORT = Number(process.env.PORT ?? 3000);
 const MASTER_PASSCODE = process.env.MASTER_PASSCODE ?? "family-server-123";
 const JWT_SECRET = process.env.JWT_SECRET ?? "change-this-secret";
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME ?? (process.env.TEST_USER_1_NAME ?? "alice");
 
 const WORLD_LIMIT = 1000;
 const SECTION_SIZE = 200;
@@ -108,7 +128,23 @@ const sections = new Map<string, Section>();
 const enemies = new Map<string, EnemyState>();
 const bosses = new Map<string, BossState>();
 const groups = new Map<string, GroupState>();
+const newsPosts: NewsPost[] = [
+  {
+    id: "news-1",
+    title: "Sprint 4 Online",
+    body: "News and bug reporting are now active.",
+    author: "system",
+    timestamp: Date.now()
+  }
+];
+const reportEvents: ReportEvent[] = [];
 let groupCounter = 1;
+let newsCounter = 2;
+let reportCounter = 1;
+
+function getUserRole(username: string): UserRole {
+  return username === ADMIN_USERNAME ? "admin" : "player";
+}
 
 function toSectionKey(gridX: number, gridY: number): string {
   return `${gridX}:${gridY}`;
@@ -384,7 +420,7 @@ setInterval(() => {
   tickActiveEnemies();
 }, 1000);
 
-type AuthRequest = Request & { user?: { username: string } };
+type AuthRequest = Request & { user?: { username: string; role: UserRole } };
 
 function requireAuth(req: AuthRequest, res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
@@ -395,8 +431,11 @@ function requireAuth(req: AuthRequest, res: Response, next: NextFunction): void 
 
   const token = authHeader.slice("Bearer ".length);
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as { username: string };
-    req.user = { username: decoded.username };
+    const decoded = jwt.verify(token, JWT_SECRET) as { username: string; role?: UserRole };
+    req.user = {
+      username: decoded.username,
+      role: decoded.role ?? getUserRole(decoded.username)
+    };
     next();
   } catch {
     res.status(401).json({ error: "Invalid token" });
@@ -436,15 +475,102 @@ app.post("/api/auth/login", async (req: Request, res: Response) => {
     return;
   }
 
-  const token = jwt.sign({ username: user.username }, JWT_SECRET, { expiresIn: "2h" });
-  res.json({ token, username: user.username, message: "Login successful" });
+  const role = getUserRole(user.username);
+  const token = jwt.sign({ username: user.username, role }, JWT_SECRET, { expiresIn: "2h" });
+  res.json({ token, username: user.username, role, message: "Login successful" });
 });
 
 app.get("/api/main", requireAuth, (req: AuthRequest, res: Response) => {
   res.json({
     message: `Welcome ${req.user?.username}. You reached the main page.`,
-    actions: ["Start Game", "News"]
+    role: req.user?.role,
+    actions: ["Start Game", "News", "Report Bug"]
   });
+});
+
+app.get("/api/news", requireAuth, (req: AuthRequest, res: Response) => {
+  const feed = [
+    ...newsPosts.map((post) => ({
+      type: "news",
+      id: post.id,
+      title: post.title,
+      body: post.body,
+      author: post.author,
+      timestamp: post.timestamp
+    })),
+    ...reportEvents.map((report) => ({
+      type: "report",
+      id: report.id,
+      reporter: report.reporter,
+      reportedUser: report.reportedUser,
+      reason: report.reason,
+      source: report.source,
+      timestamp: report.timestamp
+    }))
+  ].sort((a, b) => b.timestamp - a.timestamp);
+
+  res.json({
+    isAdmin: req.user?.role === "admin",
+    adminUser: ADMIN_USERNAME,
+    feed
+  });
+});
+
+app.post("/api/news", requireAuth, (req: AuthRequest, res: Response) => {
+  if (req.user?.role !== "admin") {
+    res.status(403).json({ error: "Only admin can publish news" });
+    return;
+  }
+
+  const title = String(req.body?.title ?? "").trim();
+  const body = String(req.body?.body ?? "").trim();
+  if (!title || !body) {
+    res.status(400).json({ error: "title and body are required" });
+    return;
+  }
+
+  const post: NewsPost = {
+    id: `news-${newsCounter}`,
+    title,
+    body,
+    author: req.user.username,
+    timestamp: Date.now()
+  };
+  newsCounter += 1;
+  newsPosts.push(post);
+  res.json({ message: "News published", post });
+});
+
+app.post("/api/reports", requireAuth, (req: AuthRequest, res: Response) => {
+  const reporter = req.user?.username;
+  if (!reporter) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const reason = String(req.body?.reason ?? "").trim();
+  const reportedUserRaw = String(req.body?.reportedUser ?? "").trim();
+  const sourceRaw = String(req.body?.source ?? "bug").trim().toLowerCase();
+  const source: "bug" | "player" = sourceRaw === "player" ? "player" : "bug";
+  const reportedUser = reportedUserRaw || (source === "player" ? "unknown-player" : "server-bug");
+
+  if (!reason) {
+    res.status(400).json({ error: "reason is required" });
+    return;
+  }
+
+  const report: ReportEvent = {
+    id: `report-${reportCounter}`,
+    reporter,
+    reportedUser,
+    reason,
+    source,
+    timestamp: Date.now()
+  };
+  reportCounter += 1;
+  reportEvents.push(report);
+
+  res.json({ message: "Report submitted", report });
 });
 
 app.post("/api/world/join", requireAuth, (req: AuthRequest, res: Response) => {
@@ -753,9 +879,11 @@ app.post("/api/bosses/hidden-respawn", requireAuth, (req: AuthRequest, res: Resp
 });
 
 app.listen(PORT, () => {
-  console.log(`Sprint 3 server running at http://localhost:${PORT}`);
+  console.log(`Sprint 4 server running at http://localhost:${PORT}`);
   console.log("Health check: GET /api/health");
   console.log("Join world: POST /api/world/join");
   console.log("Boss combat: POST /api/combat/attack-boss");
   console.log("Groups: POST /api/group/create");
+  console.log("News feed: GET /api/news | Admin post: POST /api/news");
+  console.log("Report events: POST /api/reports");
 });
