@@ -358,6 +358,7 @@
       const MOVE_SPEED = 22;
       const TURN_SPEED = 2.2;
       const SHOP_UI_OPEN_RANGE = 20;
+      const SHOP_CLOSE_STEP_OUT_DISTANCE = SHOP_UI_OPEN_RANGE + 5;
       const BIOMES = [
         {
           id: "forest",
@@ -391,14 +392,16 @@
 
       function setGamePaused(nextPaused) {
         gamePaused = nextPaused;
-        if (!gamePaused) {
+        if (gamePaused) {
+          inputState.forward = false;
+          inputState.backward = false;
+          inputState.turnLeft = false;
+          inputState.turnRight = false;
+          camera.detachControl();
           return;
         }
 
-        inputState.forward = false;
-        inputState.backward = false;
-        inputState.turnLeft = false;
-        inputState.turnRight = false;
+        camera.attachControl(canvas, true);
       }
 
       function closeShopUi() {
@@ -406,6 +409,44 @@
         shopOverlayEl.classList.remove("open");
         shopOverlayEl.setAttribute("aria-hidden", "true");
         setGamePaused(false);
+      }
+
+      async function closeShopAndStepAway() {
+        if (!worldState?.player || !activeShopId || !Array.isArray(worldState.shops)) {
+          closeShopUi();
+          return;
+        }
+
+        const player = worldState.player;
+        const shop = worldState.shops.find((s) => s.id === activeShopId);
+        if (!shop) {
+          closeShopUi();
+          return;
+        }
+
+        const dx = player.x - shop.x;
+        const dy = player.y - shop.y;
+        const d = Math.hypot(dx, dy);
+
+        let nx = 1;
+        let ny = 0;
+        if (d > 0.001) {
+          nx = dx / d;
+          ny = dy / d;
+        }
+
+        const targetX = shop.x + nx * SHOP_CLOSE_STEP_OUT_DISTANCE;
+        const targetY = shop.y + ny * SHOP_CLOSE_STEP_OUT_DISTANCE;
+
+        try {
+          const data = await api("/api/world/move", "POST", { x: targetX, y: targetY });
+          closeShopUi();
+          renderWorldState(data);
+          setStatus("Left shop area.");
+        } catch (error) {
+          closeShopUi();
+          setStatus(`Could not step away from shop: ${error.message}`);
+        }
       }
 
       function renderShopRows(shop) {
@@ -1069,7 +1110,7 @@
 
         if (gamePaused) {
           if (key === "escape") {
-            closeShopUi();
+            closeShopAndStepAway();
           }
           return;
         }
@@ -1180,7 +1221,7 @@
       });
       document.getElementById("exchangeBtn").addEventListener("click", exchangeSelectedTool);
       document.getElementById("useItemBtn").addEventListener("click", useSelectedItem);
-      document.getElementById("closeShopBtn").addEventListener("click", closeShopUi);
+      document.getElementById("closeShopBtn").addEventListener("click", closeShopAndStepAway);
 
       window.addEventListener("resize", () => {
         engine.resize();
