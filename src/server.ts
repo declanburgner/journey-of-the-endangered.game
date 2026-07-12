@@ -189,6 +189,10 @@ const SHIELD_BLOCK_RADIUS = 10;
 const SHOP_INTERACT_RANGE = 20;
 const TOTEM_STACK_MAX = 16;
 const PLAYER_INACTIVE_TIMEOUT_MS = 15000;
+const ENTITY_COLLISION_RADIUS = 9;
+const STRUCTURE_COLLISION_RADIUS = 15;
+const SPAWN_RESOLVE_TRIES = 14;
+const PLAYER_COLLISION_RADIUS = 10;
 
 const TOOL_CONFIG: Record<ToolId, ToolStats> = {
   sword: { id: "sword", name: "Sword", damage: 5, cooldownMs: 1000 },
@@ -442,6 +446,7 @@ function createShops(): void {
 }
 
 createShops();
+resolveWorldOverlaps();
 
 function getOrCreatePlayer(username: string): PlayerState {
   const existing = players.get(username);
@@ -470,8 +475,9 @@ function getOrCreatePlayer(username: string): PlayerState {
 }
 
 function resetPlayerForNewRun(player: PlayerState): void {
-  player.x = 0;
-  player.y = 0;
+  const safeStart = findNearestOpenPlayerPosition({ x: 0, y: 0 }, player.username);
+  player.x = safeStart?.x ?? 0;
+  player.y = safeStart?.y ?? 0;
   player.health = 50;
   player.isDead = false;
   player.inventorySlots = [{ kind: "tool", id: "sword" }, null, null, null, null, null, null, null, null, null];
@@ -645,6 +651,193 @@ function moveToward(origin: Vec2, target: Vec2, step: number): Vec2 {
     x: origin.x + nx * step,
     y: origin.y + ny * step
   };
+}
+
+function rotate(vec: Vec2, angleDeg: number): Vec2 {
+  const rad = (angleDeg * Math.PI) / 180;
+  const cs = Math.cos(rad);
+  const sn = Math.sin(rad);
+  return {
+    x: vec.x * cs - vec.y * sn,
+    y: vec.x * sn + vec.y * cs
+  };
+}
+
+function structurePositions(): Vec2[] {
+  const points: Vec2[] = [];
+  for (const shop of shops.values()) {
+    points.push({ x: shop.x, y: shop.y });
+  }
+  for (const chest of chests.values()) {
+    points.push({ x: chest.x, y: chest.y });
+  }
+  return points;
+}
+
+function overlapsStructure(pos: Vec2, radius = STRUCTURE_COLLISION_RADIUS): boolean {
+  for (const s of structurePositions()) {
+    if (distance(pos, s) < radius) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function overlapsEntities(
+  pos: Vec2,
+  radius = ENTITY_COLLISION_RADIUS,
+  selfEnemyId?: string,
+  selfBossId?: string
+): boolean {
+  for (const enemy of enemies.values()) {
+    if (!enemy.isAlive || enemy.id === selfEnemyId) {
+      continue;
+    }
+    if (distance(pos, { x: enemy.x, y: enemy.y }) < radius) {
+      return true;
+    }
+  }
+
+  for (const boss of bosses.values()) {
+    if (!boss.isAlive || boss.id === selfBossId) {
+      continue;
+    }
+    if (distance(pos, { x: boss.x, y: boss.y }) < radius) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function overlapsPlayers(pos: Vec2, ignoreUsername?: string): boolean {
+  for (const player of players.values()) {
+    if (player.username === ignoreUsername) {
+      continue;
+    }
+    if (player.isDead || !isPlayerActive(player)) {
+      continue;
+    }
+    if (distance(pos, { x: player.x, y: player.y }) < PLAYER_COLLISION_RADIUS) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isBlockedForPlayer(pos: Vec2, username: string): boolean {
+  return (
+    overlapsStructure(pos, STRUCTURE_COLLISION_RADIUS) ||
+    overlapsEntities(pos, ENTITY_COLLISION_RADIUS) ||
+    overlapsPlayers(pos, username)
+  );
+}
+
+function findNearestOpenPlayerPosition(start: Vec2, username: string): Vec2 | null {
+  const origin = {
+    x: clamp(start.x, -WORLD_LIMIT, WORLD_LIMIT),
+    y: clamp(start.y, -WORLD_LIMIT, WORLD_LIMIT)
+  };
+
+  if (!isBlockedForPlayer(origin, username)) {
+    return origin;
+  }
+
+  const directions = 16;
+  for (let ring = 1; ring <= 14; ring += 1) {
+    const radius = ring * 4;
+    for (let i = 0; i < directions; i += 1) {
+      const angle = (i / directions) * Math.PI * 2;
+      const candidate = {
+        x: clamp(origin.x + Math.cos(angle) * radius, -WORLD_LIMIT, WORLD_LIMIT),
+        y: clamp(origin.y + Math.sin(angle) * radius, -WORLD_LIMIT, WORLD_LIMIT)
+      };
+      if (!isBlockedForPlayer(candidate, username)) {
+        return candidate;
+      }
+    }
+  }
+
+  return null;
+}
+
+function steerAroundStructuresAndEntities(
+  origin: Vec2,
+  target: Vec2,
+  step: number,
+  selfEnemyId?: string,
+  selfBossId?: string
+): Vec2 {
+  const base = moveToward(origin, target, step);
+  const baseDir = { x: base.x - origin.x, y: base.y - origin.y };
+  const len = Math.hypot(baseDir.x, baseDir.y);
+  if (len <= 0.0001) {
+    return origin;
+  }
+
+  const norm = { x: baseDir.x / len, y: baseDir.y / len };
+  const angles = [0, 35, -35, 70, -70, 105, -105, 140, -140];
+  let best: Vec2 | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const a of angles) {
+    const dir = rotate(norm, a);
+    const candidate = {
+      x: clamp(origin.x + dir.x * step, -WORLD_LIMIT, WORLD_LIMIT),
+      y: clamp(origin.y + dir.y * step, -WORLD_LIMIT, WORLD_LIMIT)
+    };
+
+    if (overlapsStructure(candidate)) {
+      continue;
+    }
+    if (overlapsEntities(candidate, ENTITY_COLLISION_RADIUS, selfEnemyId, selfBossId)) {
+      continue;
+    }
+
+    const score = distance(candidate, target);
+    if (score < bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+
+  return best ?? origin;
+}
+
+function resolveWorldOverlaps(): void {
+  for (const enemy of enemies.values()) {
+    let placed = { x: enemy.x, y: enemy.y };
+    for (let i = 0; i < SPAWN_RESOLVE_TRIES; i += 1) {
+      if (!overlapsStructure(placed) && !overlapsEntities(placed, ENTITY_COLLISION_RADIUS, enemy.id)) {
+        break;
+      }
+      placed = {
+        x: clamp(placed.x + (Math.random() - 0.5) * 24, -WORLD_LIMIT, WORLD_LIMIT),
+        y: clamp(placed.y + (Math.random() - 0.5) * 24, -WORLD_LIMIT, WORLD_LIMIT)
+      };
+    }
+    enemy.x = placed.x;
+    enemy.y = placed.y;
+    enemy.sectionKey = getSectionKeyForPosition(enemy.x, enemy.y);
+  }
+
+  for (const boss of bosses.values()) {
+    let placed = { x: boss.x, y: boss.y };
+    for (let i = 0; i < SPAWN_RESOLVE_TRIES; i += 1) {
+      if (!overlapsStructure(placed) && !overlapsEntities(placed, ENTITY_COLLISION_RADIUS + 4, undefined, boss.id)) {
+        break;
+      }
+      placed = {
+        x: clamp(placed.x + (Math.random() - 0.5) * 28, -WORLD_LIMIT, WORLD_LIMIT),
+        y: clamp(placed.y + (Math.random() - 0.5) * 28, -WORLD_LIMIT, WORLD_LIMIT)
+      };
+    }
+    boss.x = placed.x;
+    boss.y = placed.y;
+    boss.spawnX = placed.x;
+    boss.spawnY = placed.y;
+    boss.sectionKey = getSectionKeyForPosition(boss.x, boss.y);
+  }
 }
 
 function getPlayerActiveSectionKeys(player: PlayerState): string[] {
@@ -841,10 +1034,21 @@ function respawnEnemy(enemyId: string): void {
     return;
   }
 
-  const offsetX = (Math.random() - 0.5) * (SECTION_SIZE * 0.6);
-  const offsetY = (Math.random() - 0.5) * (SECTION_SIZE * 0.6);
-  enemy.x = clamp(section.center.x + offsetX, -WORLD_LIMIT, WORLD_LIMIT);
-  enemy.y = clamp(section.center.y + offsetY, -WORLD_LIMIT, WORLD_LIMIT);
+  let candidate = {
+    x: clamp(section.center.x + (Math.random() - 0.5) * (SECTION_SIZE * 0.6), -WORLD_LIMIT, WORLD_LIMIT),
+    y: clamp(section.center.y + (Math.random() - 0.5) * (SECTION_SIZE * 0.6), -WORLD_LIMIT, WORLD_LIMIT)
+  };
+  for (let i = 0; i < SPAWN_RESOLVE_TRIES; i += 1) {
+    if (!overlapsStructure(candidate) && !overlapsEntities(candidate, ENTITY_COLLISION_RADIUS, enemy.id)) {
+      break;
+    }
+    candidate = {
+      x: clamp(section.center.x + (Math.random() - 0.5) * (SECTION_SIZE * 0.6), -WORLD_LIMIT, WORLD_LIMIT),
+      y: clamp(section.center.y + (Math.random() - 0.5) * (SECTION_SIZE * 0.6), -WORLD_LIMIT, WORLD_LIMIT)
+    };
+  }
+  enemy.x = candidate.x;
+  enemy.y = candidate.y;
   enemy.health = enemy.maxHealth;
   enemy.isAlive = true;
   enemy.lastAttackAtMs = 0;
@@ -888,7 +1092,12 @@ function tickActiveEnemies(): void {
     const currentDistance = distance({ x: enemy.x, y: enemy.y }, playerPos);
 
     if (currentDistance > ENEMY_ATTACK_RANGE) {
-      const nextPos = moveToward({ x: enemy.x, y: enemy.y }, playerPos, ENEMY_MOVE_PER_TICK);
+      const nextPos = steerAroundStructuresAndEntities(
+        { x: enemy.x, y: enemy.y },
+        playerPos,
+        ENEMY_MOVE_PER_TICK,
+        enemy.id
+      );
       const distanceAfterMove = distance(nextPos, playerPos);
       if (!(isShieldActive(nearestPlayer) && distanceAfterMove <= SHIELD_BLOCK_RADIUS)) {
         enemy.x = clamp(nextPos.x, -WORLD_LIMIT, WORLD_LIMIT);
@@ -950,7 +1159,13 @@ function tickActiveBosses(): void {
     }
 
     const playerPos = { x: nearestPlayer.x, y: nearestPlayer.y };
-    const nextPos = moveToward({ x: boss.x, y: boss.y }, playerPos, BOSS_MOVE_PER_TICK);
+    const nextPos = steerAroundStructuresAndEntities(
+      { x: boss.x, y: boss.y },
+      playerPos,
+      BOSS_MOVE_PER_TICK,
+      undefined,
+      boss.id
+    );
     const distanceAfterMove = distance(nextPos, playerPos);
     if (!(isShieldActive(nearestPlayer) && distanceAfterMove <= SHIELD_BLOCK_RADIUS)) {
       boss.x = clamp(nextPos.x, -WORLD_LIMIT, WORLD_LIMIT);
@@ -1162,10 +1377,16 @@ app.post("/api/world/join", requireAuth, (req: AuthRequest, res: Response) => {
   const player = getOrCreatePlayer(username);
   const requestedX = Number(req.body?.x);
   const requestedY = Number(req.body?.y);
-  if (Number.isFinite(requestedX) && Number.isFinite(requestedY)) {
-    player.x = clamp(requestedX, -WORLD_LIMIT, WORLD_LIMIT);
-    player.y = clamp(requestedY, -WORLD_LIMIT, WORLD_LIMIT);
+  const joinTarget: Vec2 = Number.isFinite(requestedX) && Number.isFinite(requestedY)
+    ? { x: requestedX, y: requestedY }
+    : { x: player.x, y: player.y };
+  const safeJoin = findNearestOpenPlayerPosition(joinTarget, username);
+  if (!safeJoin) {
+    res.status(400).json({ error: "No free spot available near that join point." });
+    return;
   }
+  player.x = safeJoin.x;
+  player.y = safeJoin.y;
   player.lastSeenAtMs = Date.now();
 
   const state = buildWorldState(username);
@@ -1218,8 +1439,14 @@ app.post("/api/world/move", requireAuth, (req: AuthRequest, res: Response) => {
     return;
   }
 
-  player.x = clamp(nextX, -WORLD_LIMIT, WORLD_LIMIT);
-  player.y = clamp(nextY, -WORLD_LIMIT, WORLD_LIMIT);
+  const safeMove = findNearestOpenPlayerPosition({ x: nextX, y: nextY }, username);
+  if (!safeMove) {
+    res.status(400).json({ error: "Blocked by entities or structures." });
+    return;
+  }
+
+  player.x = safeMove.x;
+  player.y = safeMove.y;
   res.json({ message: "Move accepted", ...buildWorldState(username) });
 });
 

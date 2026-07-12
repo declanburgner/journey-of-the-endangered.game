@@ -324,7 +324,7 @@
       const canvas = document.getElementById("gameCanvas");
       const engine = new BABYLON.Engine(canvas, true);
       const scene = new BABYLON.Scene(engine);
-      scene.clearColor = new BABYLON.Color4(0.72, 0.88, 1, 1);
+      scene.clearColor = new BABYLON.Color4(0.83, 0.94, 1, 1);
 
       const TOOL_STATS = {
         sword: { name: "Sword", damage: 5, cooldownMs: 1000 },
@@ -368,8 +368,11 @@
       const skyMat = new BABYLON.StandardMaterial("skyMat", scene);
       skyMat.backFaceCulling = false;
       skyMat.disableLighting = true;
-      skyMat.diffuseColor = new BABYLON.Color3(0.72, 0.88, 1);
+      skyMat.diffuseColor = new BABYLON.Color3(0.84, 0.94, 1);
+      skyMat.emissiveColor = new BABYLON.Color3(0.84, 0.94, 1);
       sky.material = skyMat;
+      sky.isPickable = false;
+      sky.infiniteDistance = true;
 
       const enemyMeshes = new Map();
       const bossMeshes = new Map();
@@ -680,17 +683,45 @@
 
           const width = biome.maxX - biome.minX;
           const depth = biome.maxY - biome.minY;
+          const usedPositions = [];
+
+          const pickPosition = (seedBase, minDistance) => {
+            for (let attempt = 0; attempt < 40; attempt += 1) {
+              const seed = seedBase + attempt * 97;
+              const px = biome.minX + seededNoise(seed * 2 + 11) * width;
+              const pz = biome.minY + seededNoise(seed * 2 + 29) * depth;
+
+              let overlaps = false;
+              for (const pos of usedPositions) {
+                if (Math.hypot(px - pos.x, pz - pos.z) < minDistance) {
+                  overlaps = true;
+                  break;
+                }
+              }
+
+              if (!overlaps) {
+                return { x: px, z: pz };
+              }
+            }
+            return null;
+          };
 
           for (let i = 0; i < biome.treeCount; i += 1) {
-            const px = biome.minX + seededNoise(i * 2 + 11) * width;
-            const pz = biome.minY + seededNoise(i * 2 + 29) * depth;
-            spawnForestTree(px, pz, i);
+            const pos = pickPosition(i + 13, 30);
+            if (!pos) {
+              continue;
+            }
+            usedPositions.push(pos);
+            spawnForestTree(pos.x, pos.z, i);
           }
 
           for (let i = 0; i < biome.bushCount; i += 1) {
-            const px = biome.minX + seededNoise(i * 3 + 47) * width;
-            const pz = biome.minY + seededNoise(i * 3 + 71) * depth;
-            spawnForestBush(px, pz, i);
+            const pos = pickPosition(i + 1009, 16);
+            if (!pos) {
+              continue;
+            }
+            usedPositions.push(pos);
+            spawnForestBush(pos.x, pos.z, i);
           }
         }
       }
