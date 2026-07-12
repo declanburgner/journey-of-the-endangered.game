@@ -13,7 +13,7 @@
 - Sprint 2 does: Build section loading (300 feet), enemies, combat, and XP/gold rewards.
 - Sprint 3 does: Add Hydra/Cyclops bosses, respawn logic, in-map group joining, and first-person 3D browser preview.
 - Sprint 4 does: Build main page report flow, News page, admin news posting, and report event feed.
-- Sprint 5 does: Add admin tools (kick/ban), rate limits, logs, and device input testing.
+- Sprint 5 does: Add admin tools (kick/ban), rate limits, logs, device input testing, and chest/tool loot system.
 
 ## 2. Core Technology
 - Server language: TypeScript.
@@ -148,11 +148,17 @@
   - Show player report time and reason in the news feed.
   - Success check: Admin can post news and players can view/report correctly.
 
-- Sprint 5: Safety, Admin Controls, and Device Testing
+- Sprint 5: Safety, Admin Controls, Device Testing, and Tool Loot
   - Add admin role checks, kick, and ban/unban tools.
   - Add login/passcode rate limits.
   - Add moderation logs for bans, kicks, reports, and login failures.
   - Test touch controls (iPad/iPhone) and keyboard controls (Windows/macOS).
+  - Add chests to the game world.
+  - Add tools to the game. Base tool is Sword.
+  - Chests contain random tools with these drop chances:
+    - 25% chance: either Mace or Pickaxe.
+    - 20% chance: either Diamond-Tipped Mace or Diamond Pickaxe.
+    - 10% chance: Diamond Sword.
   - Success check: Non-admin cannot use admin actions and all target devices can connect.
 
 ## 14. Future Enhancements (Post-Launch)

@@ -25,6 +25,7 @@ type PlayerState = {
   username: string;
   x: number;
   y: number;
+  health: number;
   xp: number;
   gold: number;
   groupId: string | null;
@@ -104,7 +105,8 @@ const BOSS_ATTACK_DAMAGE = 30;
 const BOSS_ATTACK_RANGE = 25;
 const BOSS_KILL_XP_REWARD = 200;
 const BOSS_KILL_GOLD_REWARD = 120;
-const BOSS_TRIGGER_RANGE = 100;
+const BOSS_TRIGGER_RANGE = 8;
+const BOSS_MOVE_PER_TICK = 5;
 
 const rawUsers = [
   {
@@ -261,7 +263,15 @@ function getOrCreatePlayer(username: string): PlayerState {
     return existing;
   }
 
-  const created: PlayerState = { username, x: 0, y: 0, xp: 0, gold: 0, groupId: null };
+  const created: PlayerState = {
+    username,
+    x: 0,
+    y: 0,
+    health: 50,
+    xp: 0,
+    gold: 0,
+    groupId: null
+  };
   players.set(username, created);
   return created;
 }
@@ -416,8 +426,37 @@ function tickActiveEnemies(): void {
   }
 }
 
+function tickActiveBosses(): void {
+  const activeSections = getGlobalActiveSectionKeys();
+  if (activeSections.size === 0) {
+    return;
+  }
+
+  for (const boss of bosses.values()) {
+    if (!boss.isAlive) {
+      continue;
+    }
+    if (!activeSections.has(boss.sectionKey)) {
+      continue;
+    }
+
+    boss.x = clamp(
+      boss.x + (Math.random() - 0.5) * (BOSS_MOVE_PER_TICK * 2),
+      -WORLD_LIMIT,
+      WORLD_LIMIT
+    );
+    boss.y = clamp(
+      boss.y + (Math.random() - 0.5) * (BOSS_MOVE_PER_TICK * 2),
+      -WORLD_LIMIT,
+      WORLD_LIMIT
+    );
+    boss.sectionKey = getSectionKeyForPosition(boss.x, boss.y);
+  }
+}
+
 setInterval(() => {
   tickActiveEnemies();
+  tickActiveBosses();
 }, 1000);
 
 type AuthRequest = Request & { user?: { username: string; role: UserRole } };
@@ -863,13 +902,18 @@ app.post("/api/bosses/hidden-respawn", requireAuth, (req: AuthRequest, res: Resp
     return;
   }
 
+  if (boss.isAlive) {
+    res.status(400).json({ error: `${boss.name} is already alive` });
+    return;
+  }
+
   const triggerDistance = distance(
     { x: player.x, y: player.y },
     { x: boss.triggerX, y: boss.triggerY }
   );
   if (triggerDistance > BOSS_TRIGGER_RANGE) {
     res.status(400).json({
-      error: `You are too far from the hidden trigger. Move within ${BOSS_TRIGGER_RANGE} feet.`
+      error: `You must stand on the hidden button (within ${BOSS_TRIGGER_RANGE} feet).`
     });
     return;
   }

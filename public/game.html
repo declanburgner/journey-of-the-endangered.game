@@ -110,14 +110,13 @@
   <body>
     <div id="hud">
       <div><strong>Sprint 3 First-Person Preview</strong></div>
-      <div>Move: W/S | Turn: A/D | Look: Mouse drag | Attack nearest: E</div>
+      <div>Move: W/S | Turn: A/D | Look: Mouse drag | Attack: tap or left-click target</div>
       <div id="playerStats">Loading player...</div>
       <div id="groupStats">Group: none</div>
       <div id="status">Starting world...</div>
       <div id="controls">
         <button id="refreshBtn">Refresh World</button>
         <button id="createGroupBtn">Create Group</button>
-        <button id="respawnHydraBtn">Trigger Hydra Respawn</button>
         <button id="backBtn">Back</button>
       </div>
     </div>
@@ -144,7 +143,7 @@
       const scene = new BABYLON.Scene(engine);
       scene.clearColor = new BABYLON.Color4(0.04, 0.09, 0.2, 1);
 
-      const camera = new BABYLON.UniversalCamera("playerCam", new BABYLON.Vector3(0, 2, 0), scene);
+      const camera = new BABYLON.UniversalCamera("playerCam", new BABYLON.Vector3(0, 4.5, 0), scene);
       camera.speed = 0;
       camera.angularSensibility = 3000;
       camera.minZ = 0.1;
@@ -175,9 +174,16 @@
       const enemyMeshes = new Map();
       const bossMeshes = new Map();
 
+      const hiddenButtons = [
+        { bossId: "boss-hydra", label: "Hydra Button", x: 420, y: 300 },
+        { bossId: "boss-cyclops", label: "Cyclops Button", x: -500, y: -260 }
+      ];
+      const hiddenButtonMeshes = new Map();
+
       let worldState = null;
       let movePushCooldown = 0;
       let movedSinceLastPush = false;
+      let buttonRespawnCooldownUntil = 0;
 
       const inputState = {
         forward: false,
@@ -191,6 +197,27 @@
 
       function setStatus(text) {
         statusEl.textContent = text;
+      }
+
+      function setupHiddenButtonMeshes() {
+        for (const hiddenButton of hiddenButtons) {
+          const plate = BABYLON.MeshBuilder.CreateDisc(
+            `hidden-button-${hiddenButton.bossId}`,
+            { radius: 5, tessellation: 32 },
+            scene
+          );
+          plate.rotation.x = Math.PI / 2;
+          plate.position.x = hiddenButton.x;
+          plate.position.y = 0.2;
+          plate.position.z = hiddenButton.y;
+
+          const mat = new BABYLON.StandardMaterial(`hidden-button-mat-${hiddenButton.bossId}`, scene);
+          mat.diffuseColor = new BABYLON.Color3(0.15, 0.22, 0.28);
+          mat.emissiveColor = new BABYLON.Color3(0.06, 0.09, 0.1);
+          plate.material = mat;
+
+          hiddenButtonMeshes.set(hiddenButton.bossId, { mesh: plate, mat });
+        }
       }
 
       function upsertEnemyMesh(enemy) {
@@ -251,7 +278,7 @@
         const player = data.player;
         camera.position.x = player.x;
         camera.position.z = player.y;
-        playerStatsEl.textContent = `Player ${player.username} | XP ${player.xp} | Gold ${player.gold}`;
+        playerStatsEl.textContent = `Player ${player.username} | HP ${player.health} | XP ${player.xp} | Gold ${player.gold}`;
 
         const group = data.group;
         groupStatsEl.textContent = group
@@ -312,6 +339,54 @@
         }
       }
 
+      async function checkHiddenButtonRespawn() {
+        if (!worldState || Date.now() < buttonRespawnCooldownUntil) {
+          return;
+        }
+
+        const deadBossIds = new Set(["boss-hydra", "boss-cyclops"]);
+        for (const liveBoss of worldState.bosses || []) {
+          deadBossIds.delete(liveBoss.id);
+        }
+
+        if (deadBossIds.size === 0) {
+          return;
+        }
+
+        for (const hiddenButton of hiddenButtons) {
+          if (!deadBossIds.has(hiddenButton.bossId)) {
+            continue;
+          }
+
+          const distanceToButton = Math.hypot(
+            camera.position.x - hiddenButton.x,
+            camera.position.z - hiddenButton.y
+          );
+
+          const meshEntry = hiddenButtonMeshes.get(hiddenButton.bossId);
+          if (meshEntry) {
+            const isOnButton = distanceToButton <= 8;
+            meshEntry.mat.emissiveColor = isOnButton
+              ? new BABYLON.Color3(0.2, 0.5, 0.45)
+              : new BABYLON.Color3(0.06, 0.09, 0.1);
+          }
+
+          if (distanceToButton <= 8) {
+            buttonRespawnCooldownUntil = Date.now() + 1500;
+            try {
+              const data = await api("/api/bosses/hidden-respawn", "POST", { bossId: hiddenButton.bossId });
+              setStatus(`${hiddenButton.label} pressed: ${data.message}`);
+              await refreshWorld();
+            } catch (error) {
+              if (!String(error.message).includes("already alive")) {
+                setStatus(`Hidden button failed: ${error.message}`);
+              }
+            }
+            return;
+          }
+        }
+      }
+
       function setControlState(controlName, isPressed) {
         inputState[controlName] = isPressed;
       }
@@ -365,46 +440,23 @@
         }
       }
 
-      async function attackNearestTarget() {
-        if (!worldState) {
+      async function attackTarget(targetId) {
+        if (!targetId) {
           return;
         }
 
-        const player = worldState.player;
-        const enemies = worldState.enemies || [];
-        const bosses = worldState.bosses || [];
-
-        let nearestEnemy = null;
-        let nearestEnemyDist = Number.POSITIVE_INFINITY;
-        for (const enemy of enemies) {
-          const d = Math.hypot(player.x - enemy.x, player.y - enemy.y);
-          if (d < nearestEnemyDist) {
-            nearestEnemyDist = d;
-            nearestEnemy = enemy;
-          }
-        }
-
-        let nearestBoss = null;
-        let nearestBossDist = Number.POSITIVE_INFINITY;
-        for (const boss of bosses) {
-          const d = Math.hypot(player.x - boss.x, player.y - boss.y);
-          if (d < nearestBossDist) {
-            nearestBossDist = d;
-            nearestBoss = boss;
-          }
-        }
-
         try {
-          if (nearestBoss && nearestBossDist < nearestEnemyDist) {
-            const data = await api("/api/combat/attack-boss", "POST", { bossId: nearestBoss.id });
+          if (enemyMeshes.has(targetId)) {
+            const data = await api("/api/combat/attack", "POST", { enemyId: targetId });
             renderWorldState(data);
-            setStatus(data.message);
-          } else if (nearestEnemy) {
-            const data = await api("/api/combat/attack", "POST", { enemyId: nearestEnemy.id });
+            setStatus(`Enemy hit: ${targetId}`);
+            return;
+          }
+
+          if (bossMeshes.has(targetId)) {
+            const data = await api("/api/combat/attack-boss", "POST", { bossId: targetId });
             renderWorldState(data);
-            setStatus(data.message);
-          } else {
-            setStatus("No visible targets to attack.");
+            setStatus(`Boss hit: ${targetId}`);
           }
         } catch (error) {
           setStatus(`Attack failed: ${error.message}`);
@@ -423,9 +475,28 @@
           setControlState("turnLeft", isDown);
         } else if (key === "d") {
           setControlState("turnRight", isDown);
-        } else if (key === "e" && isDown) {
-          attackNearestTarget();
         }
+      });
+
+      scene.onPointerObservable.add((pointerInfo) => {
+        if (pointerInfo.type !== BABYLON.PointerEventTypes.POINTERDOWN) {
+          return;
+        }
+
+        const event = pointerInfo.event;
+        const isTouch = event.pointerType === "touch";
+        const isLeftClick = event.button === 0;
+        if (!isTouch && !isLeftClick) {
+          return;
+        }
+
+        const pick = scene.pick(scene.pointerX, scene.pointerY);
+        const pickedId = pick?.pickedMesh?.id;
+        if (!pickedId) {
+          return;
+        }
+
+        attackTarget(pickedId);
       });
 
       scene.onBeforeRenderObservable.add(() => {
@@ -437,6 +508,7 @@
           movedSinceLastPush = false;
           pushMovement();
         }
+        checkHiddenButtonRespawn();
       });
 
       registerHoldButton("touchForward", "forward");
@@ -454,15 +526,6 @@
           setStatus(`Group create failed: ${error.message}`);
         }
       });
-      document.getElementById("respawnHydraBtn").addEventListener("click", async () => {
-        try {
-          const data = await api("/api/bosses/hidden-respawn", "POST", { bossId: "boss-hydra" });
-          setStatus(data.message);
-          refreshWorld();
-        } catch (error) {
-          setStatus(`Respawn failed: ${error.message}`);
-        }
-      });
       document.getElementById("backBtn").addEventListener("click", () => {
         window.location.href = "/main.html";
       });
@@ -473,8 +536,15 @@
 
       async function boot() {
         try {
+          setupHiddenButtonMeshes();
           await api("/api/world/join", "POST", { x: 0, y: 0 });
           await refreshWorld();
+
+          // Keep world state fresh so boss movement is visible even if player is standing still.
+          setInterval(() => {
+            refreshWorld();
+          }, 1200);
+
           engine.runRenderLoop(() => {
             scene.render();
           });
