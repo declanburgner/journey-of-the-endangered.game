@@ -87,7 +87,7 @@
         border: 1px solid rgba(61, 85, 110, 0.9);
         border-radius: 8px;
         background-color: rgba(24, 37, 55, 0.92);
-        background-image: url("/sprites/inventory.png");
+        background-image: url("/sprites-the-real-deal/invintory.png");
         background-size: cover;
         background-position: center;
         color: #eaf4ff;
@@ -113,6 +113,18 @@
         text-align: center;
         width: 100%;
         text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+      }
+      .inventory-icon {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: 28px;
+        height: 28px;
+        background-position: center;
+        background-repeat: no-repeat;
+        background-size: contain;
+        pointer-events: none;
       }
       .touchBtn {
         border: 1px solid #2aa79f;
@@ -175,16 +187,16 @@
       <button id="touchTurnRight" class="touchBtn">Turn Right</button>
     </div>
     <div id="inventoryBar" aria-label="Inventory hotbar">
-      <button class="inventory-slot" data-slot="0"><span class="inventory-key">0</span><span class="inventory-label"></span></button>
-      <button class="inventory-slot" data-slot="1"><span class="inventory-key">1</span><span class="inventory-label"></span></button>
-      <button class="inventory-slot" data-slot="2"><span class="inventory-key">2</span><span class="inventory-label"></span></button>
-      <button class="inventory-slot" data-slot="3"><span class="inventory-key">3</span><span class="inventory-label"></span></button>
-      <button class="inventory-slot" data-slot="4"><span class="inventory-key">4</span><span class="inventory-label"></span></button>
-      <button class="inventory-slot" data-slot="5"><span class="inventory-key">5</span><span class="inventory-label"></span></button>
-      <button class="inventory-slot" data-slot="6"><span class="inventory-key">6</span><span class="inventory-label"></span></button>
-      <button class="inventory-slot" data-slot="7"><span class="inventory-key">7</span><span class="inventory-label"></span></button>
-      <button class="inventory-slot" data-slot="8"><span class="inventory-key">8</span><span class="inventory-label"></span></button>
-      <button class="inventory-slot" data-slot="9"><span class="inventory-key">9</span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="0"><span class="inventory-key">0</span><span class="inventory-icon"></span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="1"><span class="inventory-key">1</span><span class="inventory-icon"></span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="2"><span class="inventory-key">2</span><span class="inventory-icon"></span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="3"><span class="inventory-key">3</span><span class="inventory-icon"></span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="4"><span class="inventory-key">4</span><span class="inventory-icon"></span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="5"><span class="inventory-key">5</span><span class="inventory-icon"></span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="6"><span class="inventory-key">6</span><span class="inventory-icon"></span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="7"><span class="inventory-key">7</span><span class="inventory-icon"></span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="8"><span class="inventory-key">8</span><span class="inventory-icon"></span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="9"><span class="inventory-key">9</span><span class="inventory-icon"></span><span class="inventory-label"></span></button>
     </div>
     <canvas id="gameCanvas"></canvas>
 
@@ -211,6 +223,10 @@
         "diamond-mace": { name: "Diamond Mace", damage: 9, cooldownMs: 600 },
         "diamond-pickaxe": { name: "Diamond Pickaxe", damage: 8, cooldownMs: 400 },
         "diamond-sword": { name: "Diamond Sword", damage: 10, cooldownMs: 700 }
+      };
+
+      const TOOL_SPRITES = {
+        sword: "/sprites-the-real-deal/sword2.png"
       };
 
       const camera = new BABYLON.UniversalCamera("playerCam", new BABYLON.Vector3(0, 4.5, 0), scene);
@@ -289,9 +305,14 @@
           const slotIndex = Number(slotEl.dataset.slot);
           const tool = inventory?.slots?.[slotIndex] ?? null;
           const labelEl = slotEl.querySelector(".inventory-label");
+          const iconEl = slotEl.querySelector(".inventory-icon");
 
           if (labelEl) {
             labelEl.textContent = tool ? shortToolLabel(tool.name) : "";
+          }
+          if (iconEl) {
+            const spritePath = tool?.id ? TOOL_SPRITES[tool.id] : "";
+            iconEl.style.backgroundImage = spritePath ? `url(${spritePath})` : "none";
           }
 
           slotEl.classList.toggle("active", slotIndex === inventory?.selectedSlot);

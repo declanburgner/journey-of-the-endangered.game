@@ -12,6 +12,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "../public")));
 app.use("/sprites", express.static(path.join(__dirname, "../sprites")));
+app.use("/sprites-the-real-deal", express.static(path.join(__dirname, "../sprites the real deal")));
 
 type UserRecord = {
   username: string;
