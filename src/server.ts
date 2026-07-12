@@ -309,8 +309,8 @@ function createWorld(): void {
           sectionKey: key,
           x: clamp(center.x + offsetX, -WORLD_LIMIT, WORLD_LIMIT),
           y: clamp(center.y + offsetY, -WORLD_LIMIT, WORLD_LIMIT),
-          health: 100,
-          maxHealth: 100,
+          health: 10,
+          maxHealth: 10,
           isAlive: true,
           lastAttackAtMs: 0
         };
@@ -548,6 +548,34 @@ function getNearestPlayer(position: Vec2, maxRange: number): PlayerState | null 
   let nearestDistance = Number.POSITIVE_INFINITY;
 
   for (const player of players.values()) {
+    const d = distance(position, { x: player.x, y: player.y });
+    if (d < nearestDistance && d <= maxRange) {
+      nearestDistance = d;
+      nearest = player;
+    }
+  }
+
+  return nearest;
+}
+
+function isPlayerInShopSafeZone(player: PlayerState): boolean {
+  for (const shop of shops.values()) {
+    if (distance({ x: player.x, y: player.y }, { x: shop.x, y: shop.y }) <= SHOP_INTERACT_RANGE) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function getNearestEnemyTargetPlayer(position: Vec2, maxRange: number): PlayerState | null {
+  let nearest: PlayerState | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  for (const player of players.values()) {
+    if (isPlayerInShopSafeZone(player)) {
+      continue;
+    }
+
     const d = distance(position, { x: player.x, y: player.y });
     if (d < nearestDistance && d <= maxRange) {
       nearestDistance = d;
@@ -800,7 +828,7 @@ function tickActiveEnemies(): void {
       continue;
     }
 
-    const nearestPlayer = getNearestPlayer({ x: enemy.x, y: enemy.y }, ENEMY_AGGRO_RANGE);
+    const nearestPlayer = getNearestEnemyTargetPlayer({ x: enemy.x, y: enemy.y }, ENEMY_AGGRO_RANGE);
     if (!nearestPlayer) {
       continue;
     }

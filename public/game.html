@@ -68,6 +68,18 @@
       #shopOverlay.open {
         display: flex;
       }
+      #hitFog {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background: radial-gradient(circle at center, rgba(255, 64, 64, 0.38), rgba(160, 0, 0, 0.22));
+        opacity: 0;
+        transition: opacity 0.28s ease-out;
+        z-index: 30;
+      }
+      #hitFog.active {
+        opacity: 1;
+      }
       #shopPanel {
         width: min(560px, calc(100vw - 28px));
         max-height: min(82vh, 700px);
@@ -240,6 +252,7 @@
         </div>
       </div>
     </div>
+    <div id="hitFog" aria-hidden="true"></div>
     <div id="touchControls" aria-label="Touch movement controls">
       <button id="touchForward" class="touchBtn">Forward</button>
       <button id="touchBackward" class="touchBtn">Back</button>
@@ -272,6 +285,7 @@
       const shopOverlayEl = document.getElementById("shopOverlay");
       const shopTitleEl = document.getElementById("shopTitle");
       const shopRowsEl = document.getElementById("shopRows");
+      const hitFogEl = document.getElementById("hitFog");
       const inventorySlotEls = Array.from(document.querySelectorAll(".inventory-slot"));
 
       const canvas = document.getElementById("gameCanvas");
@@ -347,6 +361,7 @@
       let buttonRespawnCooldownUntil = 0;
       let activeShopId = null;
       let gamePaused = false;
+      let hitFogUntilMs = 0;
 
       const inputState = {
         forward: false,
@@ -357,6 +372,7 @@
 
       const MOVE_SPEED = 22;
       const TURN_SPEED = 2.2;
+      const HIT_FOG_DURATION_MS = 500;
       const SHOP_UI_OPEN_RANGE = 20;
       const SHOP_CLOSE_STEP_OUT_DISTANCE = SHOP_UI_OPEN_RANGE + 5;
       const BIOMES = [
@@ -374,6 +390,17 @@
 
       function setStatus(text) {
         statusEl.textContent = text;
+      }
+
+      function triggerHitFog() {
+        hitFogUntilMs = Date.now() + HIT_FOG_DURATION_MS;
+        hitFogEl.classList.add("active");
+      }
+
+      function updateHitFog() {
+        if (Date.now() >= hitFogUntilMs) {
+          hitFogEl.classList.remove("active");
+        }
       }
 
       function toolNameById(toolId) {
@@ -812,8 +839,14 @@
       }
 
       function renderWorldState(data) {
+        const previousPlayer = worldState?.player;
         worldState = data;
         const player = data.player;
+
+        if (previousPlayer && previousPlayer.username === player.username && player.health < previousPlayer.health) {
+          triggerHitFog();
+        }
+
         camera.position.x = player.x;
         camera.position.z = player.y;
         const tool = TOOL_STATS[player.equippedTool] ?? TOOL_STATS.sword;
@@ -1184,6 +1217,7 @@
       });
 
       scene.onAfterRenderObservable.add(() => {
+        updateHitFog();
         if (gamePaused) {
           return;
         }
