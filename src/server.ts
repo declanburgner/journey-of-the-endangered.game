@@ -51,7 +51,7 @@ type TotemId = "health-totem" | "shield-totem";
 
 type InventoryItem =
   | { kind: "tool"; id: ToolId }
-  | { kind: "totem"; id: TotemId };
+  | { kind: "totem"; id: TotemId; quantity: number };
 
 type ToolStats = {
   id: ToolId;
@@ -66,6 +66,7 @@ type InventoryState = {
     kind: "totem";
     id: TotemId;
     name: string;
+    quantity: number;
     slot: number;
   }) | null>;
 };
@@ -184,6 +185,7 @@ const OBSIDIAN_CHEST_CHANCE = 0.01;
 const SHIELD_DURATION_MS = 5000;
 const SHIELD_BLOCK_RADIUS = 10;
 const SHOP_INTERACT_RANGE = 20;
+const TOTEM_STACK_MAX = 16;
 
 const TOOL_CONFIG: Record<ToolId, ToolStats> = {
   sword: { id: "sword", name: "Sword", damage: 5, cooldownMs: 1000 },
@@ -472,7 +474,13 @@ function toInventoryState(player: PlayerState): InventoryState {
       if (item.kind === "tool") {
         return { kind: "tool", ...TOOL_CONFIG[item.id], slot: index };
       }
-      return { kind: "totem", id: item.id, name: TOTEM_NAMES[item.id], slot: index };
+      return {
+        kind: "totem",
+        id: item.id,
+        name: TOTEM_NAMES[item.id],
+        quantity: item.quantity,
+        slot: index
+      };
     })
   };
 }
@@ -511,12 +519,18 @@ function addToolToInventory(player: PlayerState, toolId: ToolId): number {
 }
 
 function addTotemToInventory(player: PlayerState, totemId: TotemId): number {
-  const existingIndex = player.inventorySlots.findIndex(
-    (slotItem) => !!slotItem && slotItem.kind === "totem" && slotItem.id === totemId
-  );
-  if (existingIndex >= 0) {
-    setSelectedSlot(player, existingIndex);
-    return existingIndex;
+  for (let i = 0; i < player.inventorySlots.length; i += 1) {
+    const slotItem = player.inventorySlots[i];
+    if (!slotItem || slotItem.kind !== "totem" || slotItem.id !== totemId) {
+      continue;
+    }
+    if (slotItem.quantity >= TOTEM_STACK_MAX) {
+      continue;
+    }
+
+    slotItem.quantity += 1;
+    setSelectedSlot(player, i);
+    return i;
   }
 
   const emptyIndex = player.inventorySlots.findIndex((slotItem) => slotItem === null);
@@ -524,7 +538,7 @@ function addTotemToInventory(player: PlayerState, totemId: TotemId): number {
     return -1;
   }
 
-  player.inventorySlots[emptyIndex] = { kind: "totem", id: totemId };
+  player.inventorySlots[emptyIndex] = { kind: "totem", id: totemId, quantity: 1 };
   setSelectedSlot(player, emptyIndex);
   return emptyIndex;
 }
@@ -670,7 +684,8 @@ function rollChestLoot(): InventoryItem {
   if (roll < OBSIDIAN_CHEST_CHANCE + TOTEM_CHEST_CHANCE) {
     return {
       kind: "totem",
-      id: Math.random() < 0.5 ? "health-totem" : "shield-totem"
+      id: Math.random() < 0.5 ? "health-totem" : "shield-totem",
+      quantity: 1
     };
   }
 
@@ -1270,11 +1285,14 @@ app.post("/api/inventory/use-selected", requireAuth, (req: AuthRequest, res: Res
     player.shieldUntilMs = Date.now() + SHIELD_DURATION_MS;
   }
 
-  player.inventorySlots[player.selectedSlot] = null;
+  selectedItem.quantity -= 1;
+  if (selectedItem.quantity <= 0) {
+    player.inventorySlots[player.selectedSlot] = null;
+  }
   player.equippedTool = null;
 
   res.json({
-    message: `${TOTEM_NAMES[selectedItem.id]} used`,
+    message: `${TOTEM_NAMES[selectedItem.id]} used (${Math.max(selectedItem.quantity, 0)} left)`,
     ...buildWorldState(username)
   });
 });
@@ -1399,7 +1417,7 @@ app.post("/api/chests/open", requireAuth, (req: AuthRequest, res: Response) => {
     loot:
       loot.kind === "tool"
         ? { kind: "tool", ...TOOL_CONFIG[loot.id] }
-        : { kind: "totem", id: loot.id, name: TOTEM_NAMES[loot.id] },
+        : { kind: "totem", id: loot.id, name: TOTEM_NAMES[loot.id], quantity: 1 },
     slot: assignedSlot,
     ...buildWorldState(username)
   });

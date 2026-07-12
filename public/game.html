@@ -56,6 +56,55 @@
         margin-top: 6px;
         color: var(--accent);
       }
+      #shopOverlay {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(3, 12, 24, 0.55);
+        z-index: 40;
+      }
+      #shopOverlay.open {
+        display: flex;
+      }
+      #shopPanel {
+        width: min(560px, calc(100vw - 28px));
+        max-height: min(82vh, 700px);
+        overflow-y: auto;
+        background: rgba(10, 28, 52, 0.95);
+        border: 1px solid #3e6699;
+        border-radius: 12px;
+        padding: 14px;
+        box-shadow: 0 16px 42px rgba(0, 0, 0, 0.44);
+      }
+      #shopTitle {
+        margin: 0 0 6px;
+        font-size: 1.06rem;
+      }
+      #shopHint {
+        margin: 0 0 10px;
+        color: #b7deff;
+        font-size: 0.84rem;
+      }
+      .shop-row {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 8px;
+        align-items: center;
+        padding: 7px 0;
+        border-bottom: 1px solid rgba(83, 122, 162, 0.4);
+      }
+      .shop-name {
+        font-weight: 600;
+      }
+      .shop-price {
+        color: #95efe6;
+        font-size: 0.85rem;
+      }
+      .shop-buy {
+        min-width: 72px;
+      }
       #touchControls {
         position: fixed;
         left: 50%;
@@ -178,16 +227,17 @@
         <button id="createGroupBtn">Create Group</button>
         <button id="exchangeBtn">Exchange Tool (Q)</button>
         <button id="useItemBtn">Use Totem (R)</button>
-        <select id="shopItemSelect">
-          <option value="health-totem">Health Totem</option>
-          <option value="shield-totem">Shield Totem</option>
-          <option value="obsidian-sword">Obsidian Sword</option>
-          <option value="diamond-sword">Diamond Sword</option>
-          <option value="mace">Mace</option>
-          <option value="pickaxe">Pickaxe</option>
-        </select>
-        <button id="buyShopBtn">Buy From Nearby Shop</button>
         <button id="backBtn">Back</button>
+      </div>
+    </div>
+    <div id="shopOverlay" aria-hidden="true">
+      <div id="shopPanel">
+        <h2 id="shopTitle">Shop</h2>
+        <p id="shopHint">Game paused while shopping. Press Esc or Close to resume.</p>
+        <div id="shopRows"></div>
+        <div style="margin-top: 10px; display: flex; justify-content: flex-end;">
+          <button id="closeShopBtn">Close</button>
+        </div>
       </div>
     </div>
     <div id="touchControls" aria-label="Touch movement controls">
@@ -219,6 +269,9 @@
       const statusEl = document.getElementById("status");
       const playerStatsEl = document.getElementById("playerStats");
       const groupStatsEl = document.getElementById("groupStats");
+      const shopOverlayEl = document.getElementById("shopOverlay");
+      const shopTitleEl = document.getElementById("shopTitle");
+      const shopRowsEl = document.getElementById("shopRows");
       const inventorySlotEls = Array.from(document.querySelectorAll(".inventory-slot"));
 
       const canvas = document.getElementById("gameCanvas");
@@ -292,6 +345,8 @@
       let movePushCooldown = 0;
       let movedSinceLastPush = false;
       let buttonRespawnCooldownUntil = 0;
+      let activeShopId = null;
+      let gamePaused = false;
 
       const inputState = {
         forward: false,
@@ -302,6 +357,7 @@
 
       const MOVE_SPEED = 22;
       const TURN_SPEED = 2.2;
+      const SHOP_UI_OPEN_RANGE = 20;
       const BIOMES = [
         {
           id: "forest",
@@ -319,6 +375,121 @@
         statusEl.textContent = text;
       }
 
+      function toolNameById(toolId) {
+        return TOOL_STATS[toolId]?.name || toolId;
+      }
+
+      function totemNameById(totemId) {
+        if (totemId === "health-totem") {
+          return "Health Totem";
+        }
+        if (totemId === "shield-totem") {
+          return "Shield Totem";
+        }
+        return totemId;
+      }
+
+      function setGamePaused(nextPaused) {
+        gamePaused = nextPaused;
+        if (!gamePaused) {
+          return;
+        }
+
+        inputState.forward = false;
+        inputState.backward = false;
+        inputState.turnLeft = false;
+        inputState.turnRight = false;
+      }
+
+      function closeShopUi() {
+        activeShopId = null;
+        shopOverlayEl.classList.remove("open");
+        shopOverlayEl.setAttribute("aria-hidden", "true");
+        setGamePaused(false);
+      }
+
+      function renderShopRows(shop) {
+        const rows = [];
+        for (const [toolId, price] of Object.entries(shop.toolPrices || {})) {
+          rows.push({ itemId: toolId, name: toolNameById(toolId), price });
+        }
+        for (const [totemId, price] of Object.entries(shop.totemPrices || {})) {
+          rows.push({ itemId: totemId, name: totemNameById(totemId), price });
+        }
+        rows.sort((a, b) => Number(a.price) - Number(b.price));
+
+        shopRowsEl.innerHTML = "";
+        for (const row of rows) {
+          const line = document.createElement("div");
+          line.className = "shop-row";
+
+          const name = document.createElement("div");
+          name.className = "shop-name";
+          name.textContent = row.name;
+
+          const price = document.createElement("div");
+          price.className = "shop-price";
+          price.textContent = `${row.price} gold`;
+
+          const buyBtn = document.createElement("button");
+          buyBtn.className = "shop-buy";
+          buyBtn.textContent = "Buy";
+          buyBtn.addEventListener("click", async () => {
+            if (!activeShopId) {
+              return;
+            }
+            await buyFromShop(activeShopId, row.itemId);
+          });
+
+          line.appendChild(name);
+          line.appendChild(price);
+          line.appendChild(buyBtn);
+          shopRowsEl.appendChild(line);
+        }
+      }
+
+      function openShopUi(shop) {
+        activeShopId = shop.id;
+        shopTitleEl.textContent = `${shop.name} Shop`;
+        renderShopRows(shop);
+        shopOverlayEl.classList.add("open");
+        shopOverlayEl.setAttribute("aria-hidden", "false");
+        setGamePaused(true);
+      }
+
+      function updateShopUiFromWorld(data) {
+        if (!data || !data.player || !Array.isArray(data.shops)) {
+          closeShopUi();
+          return;
+        }
+
+        let nearbyShop = null;
+        let bestDist = Number.POSITIVE_INFINITY;
+        for (const shop of data.shops) {
+          const d = Math.hypot(data.player.x - shop.x, data.player.y - shop.y);
+          if (d < bestDist) {
+            bestDist = d;
+            nearbyShop = shop;
+          }
+        }
+
+        if (!nearbyShop || bestDist > SHOP_UI_OPEN_RANGE) {
+          if (activeShopId) {
+            closeShopUi();
+          }
+          return;
+        }
+
+        if (activeShopId !== nearbyShop.id) {
+          openShopUi(nearbyShop);
+          return;
+        }
+
+        if (activeShopId) {
+          renderShopRows(nearbyShop);
+        }
+      }
+
       function seededNoise(seed) {
         const x = Math.sin(seed * 12.9898) * 43758.5453;
         return x - Math.floor(x);
@@ -332,6 +503,7 @@
         );
         const trunkMat = new BABYLON.StandardMaterial(`forest-tree-trunk-mat-${index}`, scene);
         trunkMat.diffuseColor = new BABYLON.Color3(0.38, 0.24, 0.11);
+        trunkMat.specularColor = new BABYLON.Color3(0, 0, 0);
         trunk.material = trunkMat;
         trunk.position.x = x;
         trunk.position.y = 8;
@@ -344,6 +516,7 @@
         );
         const leavesMat = new BABYLON.StandardMaterial(`forest-tree-leaves-mat-${index}`, scene);
         leavesMat.diffuseColor = new BABYLON.Color3(0.18, 0.58, 0.22);
+        leavesMat.specularColor = new BABYLON.Color3(0, 0, 0);
         leaves.material = leavesMat;
         leaves.position.x = x;
         leaves.position.y = 18;
@@ -358,6 +531,7 @@
         );
         const bushMat = new BABYLON.StandardMaterial(`forest-bush-mat-${index}`, scene);
         bushMat.diffuseColor = new BABYLON.Color3(0.2, 0.62, 0.24);
+        bushMat.specularColor = new BABYLON.Color3(0, 0, 0);
         bush.material = bushMat;
         bush.position.x = x;
         bush.position.y = 3.5;
@@ -403,15 +577,21 @@
 
         inventorySlotEls.forEach((slotEl) => {
           const slotIndex = Number(slotEl.dataset.slot);
-          const tool = inventory?.slots?.[slotIndex] ?? null;
+          const item = inventory?.slots?.[slotIndex] ?? null;
           const labelEl = slotEl.querySelector(".inventory-label");
           const iconEl = slotEl.querySelector(".inventory-icon");
 
           if (labelEl) {
-            labelEl.textContent = tool ? shortToolLabel(tool.name) : "";
+            if (!item) {
+              labelEl.textContent = "";
+            } else if (item.kind === "tool") {
+              labelEl.textContent = shortToolLabel(item.name);
+            } else {
+              labelEl.textContent = `${shortToolLabel(item.name)} x${item.quantity}`;
+            }
           }
           if (iconEl) {
-            const spritePath = tool?.id ? TOOL_SPRITES[tool.id] : "";
+            const spritePath = item?.kind === "tool" && item?.id ? TOOL_SPRITES[item.id] : "";
             iconEl.style.backgroundImage = spritePath ? `url(${spritePath})` : "none";
           }
 
@@ -621,6 +801,7 @@
         cleanupMissingMeshes(data.enemies, data.bosses || [], data.chests || [], data.shops || []);
         renderInventory(data.inventory);
         updateShieldVisual(data);
+        updateShopUiFromWorld(data);
 
         setStatus(`Sections active: ${data.activeSections.length} | Enemies: ${data.enemies.length} | Bosses: ${(data.bosses || []).length} | Chests: ${(data.chests || []).length} | Shops: ${(data.shops || []).length}`);
       }
@@ -652,6 +833,9 @@
       }
 
       async function pushMovement() {
+        if (gamePaused) {
+          return;
+        }
         if (movePushCooldown > Date.now()) {
           return;
         }
@@ -740,6 +924,9 @@
       }
 
       function updateMovement() {
+        if (gamePaused) {
+          return;
+        }
         const deltaTime = engine.getDeltaTime() / 1000;
         let didMove = false;
 
@@ -770,6 +957,9 @@
       }
 
       async function attackTarget(targetId) {
+        if (gamePaused) {
+          return;
+        }
         if (!targetId) {
           return;
         }
@@ -797,7 +987,7 @@
           }
 
           if (shopMeshes.has(targetId)) {
-            await buyFromShop(targetId);
+            await buyFromShop(targetId, "health-totem");
           }
         } catch (error) {
           setStatus(`Attack failed: ${error.message}`);
@@ -834,8 +1024,7 @@
         }
       }
 
-      async function buyFromShop(shopId) {
-        const itemId = document.getElementById("shopItemSelect").value;
+      async function buyFromShop(shopId, itemId) {
         try {
           const data = await api("/api/shops/buy", "POST", { shopId, itemId });
           renderWorldState(data);
@@ -867,7 +1056,7 @@
           return;
         }
 
-        buyFromShop(nearestShop.id);
+        buyFromShop(nearestShop.id, "health-totem");
       }
 
       scene.onKeyboardObservable.add((kbInfo) => {
@@ -875,6 +1064,13 @@
         const isDown = kbInfo.type === BABYLON.KeyboardEventTypes.KEYDOWN;
 
         if (!isDown) {
+          return;
+        }
+
+        if (gamePaused) {
+          if (key === "escape") {
+            closeShopUi();
+          }
           return;
         }
 
@@ -903,6 +1099,9 @@
       });
 
       window.addEventListener("keyup", (event) => {
+        if (gamePaused) {
+          return;
+        }
         const key = event.key.toLowerCase();
         if (key === "w") {
           setControlState("forward", false);
@@ -916,6 +1115,9 @@
       });
 
       scene.onPointerObservable.add((pointerInfo) => {
+        if (gamePaused) {
+          return;
+        }
         if (pointerInfo.type !== BABYLON.PointerEventTypes.POINTERDOWN) {
           return;
         }
@@ -941,6 +1143,9 @@
       });
 
       scene.onAfterRenderObservable.add(() => {
+        if (gamePaused) {
+          return;
+        }
         if (movedSinceLastPush) {
           movedSinceLastPush = false;
           pushMovement();
@@ -975,7 +1180,7 @@
       });
       document.getElementById("exchangeBtn").addEventListener("click", exchangeSelectedTool);
       document.getElementById("useItemBtn").addEventListener("click", useSelectedItem);
-      document.getElementById("buyShopBtn").addEventListener("click", buyFromNearestShop);
+      document.getElementById("closeShopBtn").addEventListener("click", closeShopUi);
 
       window.addEventListener("resize", () => {
         engine.resize();
