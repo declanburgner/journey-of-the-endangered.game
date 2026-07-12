@@ -153,12 +153,25 @@
   - Add login/passcode rate limits.
   - Add moderation logs for bans, kicks, reports, and login failures.
   - Test touch controls (iPad/iPhone) and keyboard controls (Windows/macOS).
-  - Add chests to the game world.
+  - Add chests to the game world (tan chest visuals in the 3D scene).
   - Add tools to the game. Base tool is Sword.
+  - Add a 10-slot inventory/hotbar for tools and items.
+  - Allow selecting hotbar slots with keyboard keys 0 through 9.
+  - Display inventory at the bottom of the screen below movement controls.
+  - Use inventory slot sprite from sprites/inventory.png.
+  - Allow exchanging currently held tool for gold: 5 gold per tool (Q key or exchange button).
   - Chests contain random tools with these drop chances:
     - 25% chance: either Mace or Pickaxe.
     - 20% chance: either Diamond-Tipped Mace or Diamond Pickaxe.
     - 10% chance: Diamond Sword.
+    - Remaining 45% chance: Sword.
+  - Tool combat values:
+    - Sword: 5 damage, 1.0 second cooldown.
+    - Mace: 7 damage, 0.7 second cooldown.
+    - Pickaxe: 6 damage, 0.5 second cooldown.
+    - Diamond Mace: 9 damage, 0.6 second cooldown.
+    - Diamond Pickaxe: 8 damage, 0.4 second cooldown.
+    - Diamond Sword: 10 damage, 0.7 second cooldown.
   - Success check: Non-admin cannot use admin actions and all target devices can connect.
 
 ## 14. Future Enhancements (Post-Launch)

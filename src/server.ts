@@ -11,6 +11,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "../public")));
+app.use("/sprites", express.static(path.join(__dirname, "../sprites")));
 
 type UserRecord = {
   username: string;
@@ -26,9 +27,33 @@ type PlayerState = {
   x: number;
   y: number;
   health: number;
+  equippedTool: ToolId | null;
+  inventorySlots: Array<ToolId | null>;
+  selectedSlot: number;
+  lastAttackAt: number;
   xp: number;
   gold: number;
   groupId: string | null;
+};
+
+type ToolId =
+  | "sword"
+  | "mace"
+  | "pickaxe"
+  | "diamond-mace"
+  | "diamond-pickaxe"
+  | "diamond-sword";
+
+type ToolStats = {
+  id: ToolId;
+  name: string;
+  damage: number;
+  cooldownMs: number;
+};
+
+type InventoryState = {
+  selectedSlot: number;
+  slots: Array<(ToolStats & { slot: number }) | null>;
 };
 
 type Section = {
@@ -60,6 +85,15 @@ type BossState = {
   respawnMs: number;
   triggerX: number;
   triggerY: number;
+};
+
+type ChestState = {
+  id: string;
+  sectionKey: string;
+  x: number;
+  y: number;
+  isOpened: boolean;
+  respawnAtMs: number | null;
 };
 
 type GroupState = {
@@ -97,16 +131,37 @@ const MIN_PLAYERS = 1;
 const MAX_PLAYERS = 25;
 const MAX_MOVE_PER_REQUEST = 60;
 const ATTACK_RANGE = 20;
-const ATTACK_DAMAGE = 25;
 const KILL_XP_REWARD = 25;
 const KILL_GOLD_REWARD = 10;
 const ENEMY_RESPAWN_MS = 10000;
-const BOSS_ATTACK_DAMAGE = 30;
 const BOSS_ATTACK_RANGE = 25;
 const BOSS_KILL_XP_REWARD = 200;
 const BOSS_KILL_GOLD_REWARD = 120;
 const BOSS_TRIGGER_RANGE = 8;
 const BOSS_MOVE_PER_TICK = 5;
+const CHEST_OPEN_RANGE = 14;
+const CHEST_RESPAWN_MS = 30000;
+const INVENTORY_SLOT_COUNT = 10;
+const TOOL_EXCHANGE_GOLD = 5;
+
+const TOOL_CONFIG: Record<ToolId, ToolStats> = {
+  sword: { id: "sword", name: "Sword", damage: 5, cooldownMs: 1000 },
+  mace: { id: "mace", name: "Mace", damage: 7, cooldownMs: 700 },
+  pickaxe: { id: "pickaxe", name: "Pickaxe", damage: 6, cooldownMs: 500 },
+  "diamond-mace": { id: "diamond-mace", name: "Diamond Mace", damage: 9, cooldownMs: 600 },
+  "diamond-pickaxe": {
+    id: "diamond-pickaxe",
+    name: "Diamond Pickaxe",
+    damage: 8,
+    cooldownMs: 400
+  },
+  "diamond-sword": {
+    id: "diamond-sword",
+    name: "Diamond Sword",
+    damage: 10,
+    cooldownMs: 700
+  }
+};
 
 const rawUsers = [
   {
@@ -129,6 +184,7 @@ const players = new Map<string, PlayerState>();
 const sections = new Map<string, Section>();
 const enemies = new Map<string, EnemyState>();
 const bosses = new Map<string, BossState>();
+const chests = new Map<string, ChestState>();
 const groups = new Map<string, GroupState>();
 const newsPosts: NewsPost[] = [
   {
@@ -170,6 +226,7 @@ function createWorld(): void {
   const minGrid = Math.floor(-WORLD_LIMIT / SECTION_SIZE);
   const maxGrid = Math.floor(WORLD_LIMIT / SECTION_SIZE);
   let enemyCounter = 1;
+  let chestCounter = 1;
 
   for (let gx = minGrid; gx <= maxGrid; gx += 1) {
     for (let gy = minGrid; gy <= maxGrid; gy += 1) {
@@ -199,6 +256,20 @@ function createWorld(): void {
         };
         enemies.set(enemy.id, enemy);
         section.enemyIds.push(enemy.id);
+      }
+
+      // Sprint 5: add a subset of chest spawns across the world.
+      if ((Math.abs(gx) + Math.abs(gy)) % 4 === 0) {
+        const chestId = `chest-${chestCounter}`;
+        chestCounter += 1;
+        chests.set(chestId, {
+          id: chestId,
+          sectionKey: key,
+          x: clamp(center.x + (Math.random() - 0.5) * (SECTION_SIZE * 0.5), -WORLD_LIMIT, WORLD_LIMIT),
+          y: clamp(center.y + (Math.random() - 0.5) * (SECTION_SIZE * 0.5), -WORLD_LIMIT, WORLD_LIMIT),
+          isOpened: false,
+          respawnAtMs: null
+        });
       }
     }
   }
@@ -268,12 +339,47 @@ function getOrCreatePlayer(username: string): PlayerState {
     x: 0,
     y: 0,
     health: 50,
+    equippedTool: "sword",
+    inventorySlots: ["sword", null, null, null, null, null, null, null, null, null],
+    selectedSlot: 0,
+    lastAttackAt: 0,
     xp: 0,
     gold: 0,
     groupId: null
   };
   players.set(username, created);
   return created;
+}
+
+function toInventoryState(player: PlayerState): InventoryState {
+  return {
+    selectedSlot: player.selectedSlot,
+    slots: player.inventorySlots.map((toolId, index) =>
+      toolId ? { ...TOOL_CONFIG[toolId], slot: index } : null
+    )
+  };
+}
+
+function setSelectedSlot(player: PlayerState, slot: number): void {
+  player.selectedSlot = clamp(Math.floor(slot), 0, INVENTORY_SLOT_COUNT - 1);
+  player.equippedTool = player.inventorySlots[player.selectedSlot];
+}
+
+function addToolToInventory(player: PlayerState, toolId: ToolId): number {
+  const existingIndex = player.inventorySlots.findIndex((slotTool) => slotTool === toolId);
+  if (existingIndex >= 0) {
+    setSelectedSlot(player, existingIndex);
+    return existingIndex;
+  }
+
+  const emptyIndex = player.inventorySlots.findIndex((slotTool) => slotTool === null);
+  if (emptyIndex < 0) {
+    return -1;
+  }
+
+  player.inventorySlots[emptyIndex] = toolId;
+  setSelectedSlot(player, emptyIndex);
+  return emptyIndex;
 }
 
 function getPlayerActiveSectionKeys(player: PlayerState): string[] {
@@ -329,6 +435,41 @@ function getVisibleBosses(activeSectionKeys: string[]): BossState[] {
   return visible;
 }
 
+function getVisibleChests(activeSectionKeys: string[]): ChestState[] {
+  const activeSet = new Set(activeSectionKeys);
+  const visible: ChestState[] = [];
+
+  for (const chest of chests.values()) {
+    if (chest.isOpened) {
+      continue;
+    }
+    if (!activeSet.has(chest.sectionKey)) {
+      continue;
+    }
+    visible.push(chest);
+  }
+
+  return visible;
+}
+
+function rollChestTool(): ToolId {
+  const roll = Math.random();
+
+  if (roll < 0.25) {
+    return Math.random() < 0.5 ? "mace" : "pickaxe";
+  }
+
+  if (roll < 0.45) {
+    return Math.random() < 0.5 ? "diamond-mace" : "diamond-pickaxe";
+  }
+
+  if (roll < 0.55) {
+    return "diamond-sword";
+  }
+
+  return "sword";
+}
+
 function getGroupForPlayer(username: string): GroupState | null {
   for (const group of groups.values()) {
     if (group.members.includes(username)) {
@@ -365,6 +506,8 @@ function buildWorldState(username: string): {
   activeSections: string[];
   enemies: EnemyState[];
   bosses: BossState[];
+  chests: ChestState[];
+  inventory: InventoryState;
   group: GroupState | null;
 } {
   const player = getOrCreatePlayer(username);
@@ -374,6 +517,8 @@ function buildWorldState(username: string): {
     activeSections,
     enemies: getVisibleEnemies(activeSections),
     bosses: getVisibleBosses(activeSections),
+    chests: getVisibleChests(activeSections),
+    inventory: toInventoryState(player),
     group: getGroupForPlayer(username)
   };
 }
@@ -454,9 +599,23 @@ function tickActiveBosses(): void {
   }
 }
 
+function tickChestRespawns(): void {
+  const now = Date.now();
+  for (const chest of chests.values()) {
+    if (!chest.isOpened || chest.respawnAtMs === null) {
+      continue;
+    }
+    if (now >= chest.respawnAtMs) {
+      chest.isOpened = false;
+      chest.respawnAtMs = null;
+    }
+  }
+}
+
 setInterval(() => {
   tickActiveEnemies();
   tickActiveBosses();
+  tickChestRespawns();
 }, 1000);
 
 type AuthRequest = Request & { user?: { username: string; role: UserRole } };
@@ -772,6 +931,107 @@ app.get("/api/world/bosses", requireAuth, (req: AuthRequest, res: Response) => {
   res.json({ bosses: state.bosses });
 });
 
+app.post("/api/inventory/select", requireAuth, (req: AuthRequest, res: Response) => {
+  const username = req.user?.username;
+  if (!username) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const slot = Number(req.body?.slot);
+  if (!Number.isInteger(slot) || slot < 0 || slot >= INVENTORY_SLOT_COUNT) {
+    res.status(400).json({ error: `slot must be an integer from 0 to ${INVENTORY_SLOT_COUNT - 1}` });
+    return;
+  }
+
+  const player = getOrCreatePlayer(username);
+  setSelectedSlot(player, slot);
+  res.json({ message: `Selected slot ${slot}`, ...buildWorldState(username) });
+});
+
+app.post("/api/inventory/exchange", requireAuth, (req: AuthRequest, res: Response) => {
+  const username = req.user?.username;
+  if (!username) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const player = getOrCreatePlayer(username);
+  const selectedTool = player.inventorySlots[player.selectedSlot];
+  if (!selectedTool) {
+    res.status(400).json({ error: "Selected slot is empty" });
+    return;
+  }
+
+  player.inventorySlots[player.selectedSlot] = null;
+  player.equippedTool = null;
+
+  const fallbackSlot = player.inventorySlots.findIndex((slotTool) => slotTool !== null);
+  if (fallbackSlot >= 0) {
+    setSelectedSlot(player, fallbackSlot);
+  }
+
+  player.gold += TOOL_EXCHANGE_GOLD;
+
+  res.json({
+    message: `Exchanged ${TOOL_CONFIG[selectedTool].name} for ${TOOL_EXCHANGE_GOLD} gold`,
+    exchangedTool: TOOL_CONFIG[selectedTool],
+    goldAdded: TOOL_EXCHANGE_GOLD,
+    ...buildWorldState(username)
+  });
+});
+
+app.post("/api/chests/open", requireAuth, (req: AuthRequest, res: Response) => {
+  const username = req.user?.username;
+  if (!username) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const chestId = String(req.body?.chestId ?? "");
+  if (!chestId) {
+    res.status(400).json({ error: "chestId is required" });
+    return;
+  }
+
+  const chest = chests.get(chestId);
+  if (!chest) {
+    res.status(404).json({ error: "Chest not found" });
+    return;
+  }
+
+  if (chest.isOpened) {
+    res.status(400).json({ error: "Chest is empty right now. Wait for respawn." });
+    return;
+  }
+
+  const player = getOrCreatePlayer(username);
+  const chestDistance = distance({ x: player.x, y: player.y }, { x: chest.x, y: chest.y });
+  if (chestDistance > CHEST_OPEN_RANGE) {
+    res.status(400).json({
+      error: `Move closer to open chest. Required range is ${CHEST_OPEN_RANGE} feet.`
+    });
+    return;
+  }
+
+  const toolId = rollChestTool();
+  const assignedSlot = addToolToInventory(player, toolId);
+  if (assignedSlot < 0) {
+    res.status(400).json({ error: "Inventory is full. Exchange or use a slot first." });
+    return;
+  }
+
+  chest.isOpened = true;
+  chest.respawnAtMs = Date.now() + CHEST_RESPAWN_MS;
+
+  res.json({
+    message: `Chest opened. You got ${TOOL_CONFIG[toolId].name}.`,
+    tool: TOOL_CONFIG[toolId],
+    slot: assignedSlot,
+    ...buildWorldState(username)
+  });
+});
+
 app.post("/api/combat/attack", requireAuth, (req: AuthRequest, res: Response) => {
   const username = req.user?.username;
   if (!username) {
@@ -780,6 +1040,19 @@ app.post("/api/combat/attack", requireAuth, (req: AuthRequest, res: Response) =>
   }
 
   const player = getOrCreatePlayer(username);
+  if (!player.equippedTool) {
+    res.status(400).json({ error: "No equipped tool. Select a slot with a tool." });
+    return;
+  }
+  const weapon = TOOL_CONFIG[player.equippedTool];
+  const now = Date.now();
+  const readyAt = player.lastAttackAt + weapon.cooldownMs;
+  if (now < readyAt) {
+    res.status(429).json({
+      error: `Weapon cooldown active for ${Math.ceil((readyAt - now) / 100) / 10}s.`
+    });
+    return;
+  }
   const enemyId = String(req.body?.enemyId ?? "");
   if (!enemyId) {
     res.status(400).json({ error: "enemyId is required" });
@@ -800,7 +1073,8 @@ app.post("/api/combat/attack", requireAuth, (req: AuthRequest, res: Response) =>
     return;
   }
 
-  enemy.health = Math.max(0, enemy.health - ATTACK_DAMAGE);
+  enemy.health = Math.max(0, enemy.health - weapon.damage);
+  player.lastAttackAt = now;
   let defeated = false;
   if (enemy.health === 0) {
     defeated = true;
@@ -818,7 +1092,9 @@ app.post("/api/combat/attack", requireAuth, (req: AuthRequest, res: Response) =>
     combat: {
       enemyId: enemy.id,
       enemyHealth: enemy.health,
-      damage: ATTACK_DAMAGE,
+      weapon: weapon.name,
+      damage: weapon.damage,
+      cooldownMs: weapon.cooldownMs,
       defeated,
       rewards: defeated ? { xp: KILL_XP_REWARD, gold: KILL_GOLD_REWARD } : null
     },
@@ -834,6 +1110,19 @@ app.post("/api/combat/attack-boss", requireAuth, (req: AuthRequest, res: Respons
   }
 
   const player = getOrCreatePlayer(username);
+  if (!player.equippedTool) {
+    res.status(400).json({ error: "No equipped tool. Select a slot with a tool." });
+    return;
+  }
+  const weapon = TOOL_CONFIG[player.equippedTool];
+  const now = Date.now();
+  const readyAt = player.lastAttackAt + weapon.cooldownMs;
+  if (now < readyAt) {
+    res.status(429).json({
+      error: `Weapon cooldown active for ${Math.ceil((readyAt - now) / 100) / 10}s.`
+    });
+    return;
+  }
   const bossId = String(req.body?.bossId ?? "");
   if (!bossId) {
     res.status(400).json({ error: "bossId is required" });
@@ -854,7 +1143,8 @@ app.post("/api/combat/attack-boss", requireAuth, (req: AuthRequest, res: Respons
     return;
   }
 
-  boss.health = Math.max(0, boss.health - BOSS_ATTACK_DAMAGE);
+  boss.health = Math.max(0, boss.health - weapon.damage);
+  player.lastAttackAt = now;
   let defeated = false;
   if (boss.health === 0) {
     defeated = true;
@@ -873,7 +1163,9 @@ app.post("/api/combat/attack-boss", requireAuth, (req: AuthRequest, res: Respons
       bossId: boss.id,
       bossName: boss.name,
       bossHealth: boss.health,
-      damage: BOSS_ATTACK_DAMAGE,
+      weapon: weapon.name,
+      damage: weapon.damage,
+      cooldownMs: weapon.cooldownMs,
       defeated,
       rewards: defeated ? { xp: BOSS_KILL_XP_REWARD, gold: BOSS_KILL_GOLD_REWARD } : null,
       autoRespawnMs: boss.respawnMs
@@ -923,10 +1215,12 @@ app.post("/api/bosses/hidden-respawn", requireAuth, (req: AuthRequest, res: Resp
 });
 
 app.listen(PORT, () => {
-  console.log(`Sprint 4 server running at http://localhost:${PORT}`);
+  console.log(`Sprint 5 server running at http://localhost:${PORT}`);
   console.log("Health check: GET /api/health");
   console.log("Join world: POST /api/world/join");
   console.log("Boss combat: POST /api/combat/attack-boss");
+  console.log("Chest open: POST /api/chests/open");
+  console.log("Inventory: POST /api/inventory/select | POST /api/inventory/exchange");
   console.log("Groups: POST /api/group/create");
   console.log("News feed: GET /api/news | Admin post: POST /api/news");
   console.log("Report events: POST /api/reports");

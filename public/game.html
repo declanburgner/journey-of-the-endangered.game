@@ -6,7 +6,7 @@
     <title>Game - Sprint 3</title>
     <style>
       :root {
-        --bg: #081833;
+        --bg: #9fd0ff;
         --panel: rgba(8, 24, 51, 0.86);
         --accent: #2fd3c8;
         --text: #eef7ff;
@@ -16,7 +16,7 @@
         height: 100%;
         margin: 0;
         overflow: hidden;
-        background: radial-gradient(circle at top, #153469, var(--bg));
+        background: radial-gradient(circle at top, #d7ecff, var(--bg));
         color: var(--text);
         font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
       }
@@ -59,13 +59,60 @@
       #touchControls {
         position: fixed;
         left: 50%;
-        bottom: 16px;
+        bottom: 102px;
         transform: translateX(-50%);
         display: grid;
         grid-template-columns: repeat(3, minmax(64px, 88px));
         grid-template-rows: repeat(2, 52px);
         gap: 8px;
         z-index: 12;
+      }
+      #inventoryBar {
+        position: fixed;
+        left: 50%;
+        bottom: 10px;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 6px;
+        z-index: 15;
+        padding: 6px 8px;
+        border-radius: 10px;
+        background: rgba(6, 15, 28, 0.62);
+        border: 1px solid rgba(64, 106, 148, 0.8);
+      }
+      .inventory-slot {
+        position: relative;
+        width: 56px;
+        height: 56px;
+        border: 1px solid rgba(61, 85, 110, 0.9);
+        border-radius: 8px;
+        background-color: rgba(24, 37, 55, 0.92);
+        background-image: url("/sprites/inventory.png");
+        background-size: cover;
+        background-position: center;
+        color: #eaf4ff;
+        font-size: 0.72rem;
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        padding-bottom: 2px;
+      }
+      .inventory-slot.active {
+        outline: 2px solid #2fd3c8;
+        box-shadow: 0 0 10px rgba(47, 211, 200, 0.55);
+      }
+      .inventory-key {
+        position: absolute;
+        top: 2px;
+        left: 4px;
+        font-size: 0.65rem;
+        color: #c9dbf5;
+      }
+      .inventory-label {
+        font-size: 0.56rem;
+        text-align: center;
+        width: 100%;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
       }
       .touchBtn {
         border: 1px solid #2aa79f;
@@ -117,6 +164,7 @@
       <div id="controls">
         <button id="refreshBtn">Refresh World</button>
         <button id="createGroupBtn">Create Group</button>
+        <button id="exchangeBtn">Exchange Tool (Q)</button>
         <button id="backBtn">Back</button>
       </div>
     </div>
@@ -125,6 +173,18 @@
       <button id="touchBackward" class="touchBtn">Back</button>
       <button id="touchTurnLeft" class="touchBtn">Turn Left</button>
       <button id="touchTurnRight" class="touchBtn">Turn Right</button>
+    </div>
+    <div id="inventoryBar" aria-label="Inventory hotbar">
+      <button class="inventory-slot" data-slot="0"><span class="inventory-key">0</span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="1"><span class="inventory-key">1</span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="2"><span class="inventory-key">2</span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="3"><span class="inventory-key">3</span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="4"><span class="inventory-key">4</span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="5"><span class="inventory-key">5</span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="6"><span class="inventory-key">6</span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="7"><span class="inventory-key">7</span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="8"><span class="inventory-key">8</span><span class="inventory-label"></span></button>
+      <button class="inventory-slot" data-slot="9"><span class="inventory-key">9</span><span class="inventory-label"></span></button>
     </div>
     <canvas id="gameCanvas"></canvas>
 
@@ -137,11 +197,21 @@
       const statusEl = document.getElementById("status");
       const playerStatsEl = document.getElementById("playerStats");
       const groupStatsEl = document.getElementById("groupStats");
+      const inventorySlotEls = Array.from(document.querySelectorAll(".inventory-slot"));
 
       const canvas = document.getElementById("gameCanvas");
       const engine = new BABYLON.Engine(canvas, true);
       const scene = new BABYLON.Scene(engine);
-      scene.clearColor = new BABYLON.Color4(0.04, 0.09, 0.2, 1);
+      scene.clearColor = new BABYLON.Color4(0.72, 0.88, 1, 1);
+
+      const TOOL_STATS = {
+        sword: { name: "Sword", damage: 5, cooldownMs: 1000 },
+        mace: { name: "Mace", damage: 7, cooldownMs: 700 },
+        pickaxe: { name: "Pickaxe", damage: 6, cooldownMs: 500 },
+        "diamond-mace": { name: "Diamond Mace", damage: 9, cooldownMs: 600 },
+        "diamond-pickaxe": { name: "Diamond Pickaxe", damage: 8, cooldownMs: 400 },
+        "diamond-sword": { name: "Diamond Sword", damage: 10, cooldownMs: 700 }
+      };
 
       const camera = new BABYLON.UniversalCamera("playerCam", new BABYLON.Vector3(0, 4.5, 0), scene);
       camera.speed = 0;
@@ -168,11 +238,12 @@
       const skyMat = new BABYLON.StandardMaterial("skyMat", scene);
       skyMat.backFaceCulling = false;
       skyMat.disableLighting = true;
-      skyMat.diffuseColor = new BABYLON.Color3(0.07, 0.15, 0.35);
+      skyMat.diffuseColor = new BABYLON.Color3(0.72, 0.88, 1);
       sky.material = skyMat;
 
       const enemyMeshes = new Map();
       const bossMeshes = new Map();
+      const chestMeshes = new Map();
 
       const hiddenButtons = [
         { bossId: "boss-hydra", label: "Hydra Button", x: 420, y: 300 },
@@ -181,6 +252,7 @@
       const hiddenButtonMeshes = new Map();
 
       let worldState = null;
+      let inventoryState = null;
       let movePushCooldown = 0;
       let movedSinceLastPush = false;
       let buttonRespawnCooldownUntil = 0;
@@ -197,6 +269,33 @@
 
       function setStatus(text) {
         statusEl.textContent = text;
+      }
+
+      function shortToolLabel(toolName) {
+        if (!toolName) {
+          return "";
+        }
+        return toolName
+          .replace("Diamond ", "D-")
+          .replace("Pickaxe", "Pick")
+          .replace("Sword", "Swd")
+          .replace("Mace", "Mac");
+      }
+
+      function renderInventory(inventory) {
+        inventoryState = inventory;
+
+        inventorySlotEls.forEach((slotEl) => {
+          const slotIndex = Number(slotEl.dataset.slot);
+          const tool = inventory?.slots?.[slotIndex] ?? null;
+          const labelEl = slotEl.querySelector(".inventory-label");
+
+          if (labelEl) {
+            labelEl.textContent = tool ? shortToolLabel(tool.name) : "";
+          }
+
+          slotEl.classList.toggle("active", slotIndex === inventory?.selectedSlot);
+        });
       }
 
       function setupHiddenButtonMeshes() {
@@ -255,7 +354,26 @@
         mesh.position.z = boss.y;
       }
 
-      function cleanupMissingMeshes(liveEnemies, liveBosses) {
+      function upsertChestMesh(chest) {
+        let mesh = chestMeshes.get(chest.id);
+        if (!mesh) {
+          mesh = BABYLON.MeshBuilder.CreateBox(
+            chest.id,
+            { width: 8, height: 5, depth: 6 },
+            scene
+          );
+          const mat = new BABYLON.StandardMaterial(`chest-mat-${chest.id}`, scene);
+          mat.diffuseColor = new BABYLON.Color3(0.82, 0.67, 0.43);
+          mat.specularColor = new BABYLON.Color3(0.2, 0.17, 0.1);
+          mesh.material = mat;
+          chestMeshes.set(chest.id, mesh);
+        }
+        mesh.position.x = chest.x;
+        mesh.position.y = 2.5;
+        mesh.position.z = chest.y;
+      }
+
+      function cleanupMissingMeshes(liveEnemies, liveBosses, liveChests) {
         const liveEnemyIds = new Set(liveEnemies.map((e) => e.id));
         for (const [id, mesh] of enemyMeshes) {
           if (!liveEnemyIds.has(id)) {
@@ -271,6 +389,14 @@
             bossMeshes.delete(id);
           }
         }
+
+        const liveChestIds = new Set(liveChests.map((c) => c.id));
+        for (const [id, mesh] of chestMeshes) {
+          if (!liveChestIds.has(id)) {
+            mesh.dispose();
+            chestMeshes.delete(id);
+          }
+        }
       }
 
       function renderWorldState(data) {
@@ -278,7 +404,11 @@
         const player = data.player;
         camera.position.x = player.x;
         camera.position.z = player.y;
-        playerStatsEl.textContent = `Player ${player.username} | HP ${player.health} | XP ${player.xp} | Gold ${player.gold}`;
+        const tool = TOOL_STATS[player.equippedTool] ?? TOOL_STATS.sword;
+        const toolText = player.equippedTool
+          ? `${tool.name} (DMG ${tool.damage}, CD ${(tool.cooldownMs / 1000).toFixed(1)}s)`
+          : "None";
+        playerStatsEl.textContent = `Player ${player.username} | HP ${player.health} | XP ${player.xp} | Gold ${player.gold} | Tool ${toolText}`;
 
         const group = data.group;
         groupStatsEl.textContent = group
@@ -291,9 +421,13 @@
         for (const boss of data.bosses || []) {
           upsertBossMesh(boss);
         }
-        cleanupMissingMeshes(data.enemies, data.bosses || []);
+        for (const chest of data.chests || []) {
+          upsertChestMesh(chest);
+        }
+        cleanupMissingMeshes(data.enemies, data.bosses || [], data.chests || []);
+        renderInventory(data.inventory);
 
-        setStatus(`Sections active: ${data.activeSections.length} | Enemies: ${data.enemies.length} | Bosses: ${(data.bosses || []).length}`);
+        setStatus(`Sections active: ${data.activeSections.length} | Enemies: ${data.enemies.length} | Bosses: ${(data.bosses || []).length} | Chests: ${(data.chests || []).length}`);
       }
 
       async function api(path, method = "GET", body = null) {
@@ -457,9 +591,36 @@
             const data = await api("/api/combat/attack-boss", "POST", { bossId: targetId });
             renderWorldState(data);
             setStatus(`Boss hit: ${targetId}`);
+            return;
+          }
+
+          if (chestMeshes.has(targetId)) {
+            const data = await api("/api/chests/open", "POST", { chestId: targetId });
+            renderWorldState(data);
+            setStatus(data.message);
           }
         } catch (error) {
           setStatus(`Attack failed: ${error.message}`);
+        }
+      }
+
+      async function selectInventorySlot(slot) {
+        try {
+          const data = await api("/api/inventory/select", "POST", { slot });
+          renderWorldState(data);
+          setStatus(`Selected slot ${slot}`);
+        } catch (error) {
+          setStatus(`Select failed: ${error.message}`);
+        }
+      }
+
+      async function exchangeSelectedTool() {
+        try {
+          const data = await api("/api/inventory/exchange", "POST", {});
+          renderWorldState(data);
+          setStatus(data.message);
+        } catch (error) {
+          setStatus(`Exchange failed: ${error.message}`);
         }
       }
 
@@ -467,14 +628,40 @@
         const key = kbInfo.event.key.toLowerCase();
         const isDown = kbInfo.type === BABYLON.KeyboardEventTypes.KEYDOWN;
 
+        if (!isDown) {
+          return;
+        }
+
+        if (/^[0-9]$/.test(key)) {
+          selectInventorySlot(Number(key));
+          return;
+        }
+        if (key === "q") {
+          exchangeSelectedTool();
+          return;
+        }
+
         if (key === "w") {
-          setControlState("forward", isDown);
+          setControlState("forward", true);
         } else if (key === "s") {
-          setControlState("backward", isDown);
+          setControlState("backward", true);
         } else if (key === "a") {
-          setControlState("turnLeft", isDown);
+          setControlState("turnLeft", true);
         } else if (key === "d") {
-          setControlState("turnRight", isDown);
+          setControlState("turnRight", true);
+        }
+      });
+
+      window.addEventListener("keyup", (event) => {
+        const key = event.key.toLowerCase();
+        if (key === "w") {
+          setControlState("forward", false);
+        } else if (key === "s") {
+          setControlState("backward", false);
+        } else if (key === "a") {
+          setControlState("turnLeft", false);
+        } else if (key === "d") {
+          setControlState("turnRight", false);
         }
       });
 
@@ -516,6 +703,13 @@
       registerHoldButton("touchTurnLeft", "turnLeft");
       registerHoldButton("touchTurnRight", "turnRight");
 
+      inventorySlotEls.forEach((slotEl) => {
+        slotEl.addEventListener("click", () => {
+          const slot = Number(slotEl.dataset.slot);
+          selectInventorySlot(slot);
+        });
+      });
+
       document.getElementById("refreshBtn").addEventListener("click", refreshWorld);
       document.getElementById("createGroupBtn").addEventListener("click", async () => {
         try {
@@ -529,6 +723,7 @@
       document.getElementById("backBtn").addEventListener("click", () => {
         window.location.href = "/main.html";
       });
+      document.getElementById("exchangeBtn").addEventListener("click", exchangeSelectedTool);
 
       window.addEventListener("resize", () => {
         engine.resize();
