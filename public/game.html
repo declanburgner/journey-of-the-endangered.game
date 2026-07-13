@@ -381,6 +381,8 @@
       const chestMeshes = new Map();
       const shopMeshes = new Map();
       const portalMeshes = new Map();
+      const enemyHitFlashUntilMs = new Map();
+      const bossHitFlashUntilMs = new Map();
       const surfaceBiomeMeshes = [];
       const caveBiomeMeshes = [];
       let shieldCube = null;
@@ -415,6 +417,7 @@
       const MOVE_SPEED = 66;
       const TURN_SPEED = 2.2;
       const HIT_FOG_DURATION_MS = 500;
+      const HIT_FLASH_DURATION_MS = 300;
       const SHOP_UI_OPEN_RANGE = 20;
       const SHOP_CLOSE_STEP_OUT_DISTANCE = SHOP_UI_OPEN_RANGE + 5;
       const BIOMES = [
@@ -442,6 +445,39 @@
       function updateHitFog() {
         if (Date.now() >= hitFogUntilMs) {
           hitFogEl.classList.remove("active");
+        }
+      }
+
+      function getEnemyBaseColor() {
+        return new BABYLON.Color3(0.9, 0.2, 0.2);
+      }
+
+      function getBossBaseColor(bossId) {
+        return bossId.includes("hydra")
+          ? new BABYLON.Color3(0.56, 0.23, 0.75)
+          : new BABYLON.Color3(0.75, 0.7, 0.2);
+      }
+
+      function applyHitFlashVisuals() {
+        const now = Date.now();
+        const hitColor = new BABYLON.Color3(1, 0.45, 0.1);
+
+        for (const [enemyId, mesh] of enemyMeshes) {
+          const mat = mesh.material;
+          if (!(mat instanceof BABYLON.StandardMaterial)) {
+            continue;
+          }
+          const flashing = (enemyHitFlashUntilMs.get(enemyId) || 0) > now;
+          mat.diffuseColor = flashing ? hitColor : getEnemyBaseColor();
+        }
+
+        for (const [bossId, mesh] of bossMeshes) {
+          const mat = mesh.material;
+          if (!(mat instanceof BABYLON.StandardMaterial)) {
+            continue;
+          }
+          const flashing = (bossHitFlashUntilMs.get(bossId) || 0) > now;
+          mat.diffuseColor = flashing ? hitColor : getBossBaseColor(bossId);
         }
       }
 
@@ -875,7 +911,7 @@
         if (!mesh) {
           mesh = BABYLON.MeshBuilder.CreateBox(enemy.id, { size: 8 }, scene);
           const mat = new BABYLON.StandardMaterial(`mat-${enemy.id}`, scene);
-          mat.diffuseColor = new BABYLON.Color3(0.9, 0.2, 0.2);
+          mat.diffuseColor = getEnemyBaseColor();
           mesh.material = mat;
           enemyMeshes.set(enemy.id, mesh);
         }
@@ -894,9 +930,7 @@
             scene
           );
           const mat = new BABYLON.StandardMaterial(`boss-mat-${boss.id}`, scene);
-          mat.diffuseColor = isHydra
-            ? new BABYLON.Color3(0.56, 0.23, 0.75)
-            : new BABYLON.Color3(0.75, 0.7, 0.2);
+          mat.diffuseColor = getBossBaseColor(boss.id);
           mesh.material = mat;
           bossMeshes.set(boss.id, mesh);
         }
@@ -972,6 +1006,7 @@
           if (!liveEnemyIds.has(id)) {
             mesh.dispose();
             enemyMeshes.delete(id);
+            enemyHitFlashUntilMs.delete(id);
           }
         }
 
@@ -980,6 +1015,7 @@
           if (!liveBossIds.has(id)) {
             mesh.dispose();
             bossMeshes.delete(id);
+            bossHitFlashUntilMs.delete(id);
           }
         }
 
@@ -1032,8 +1068,24 @@
 
       function renderWorldState(data) {
         const previousPlayer = worldState?.player;
+        const previousEnemies = new Map((worldState?.enemies || []).map((e) => [e.id, e.health]));
+        const previousBosses = new Map((worldState?.bosses || []).map((b) => [b.id, b.health]));
         worldState = data;
         const player = data.player;
+        const now = Date.now();
+
+        for (const enemy of data.enemies || []) {
+          const prevHealth = previousEnemies.get(enemy.id);
+          if (typeof prevHealth === "number" && enemy.health < prevHealth) {
+            enemyHitFlashUntilMs.set(enemy.id, now + HIT_FLASH_DURATION_MS);
+          }
+        }
+        for (const boss of data.bosses || []) {
+          const prevHealth = previousBosses.get(boss.id);
+          if (typeof prevHealth === "number" && boss.health < prevHealth) {
+            bossHitFlashUntilMs.set(boss.id, now + HIT_FLASH_DURATION_MS);
+          }
+        }
 
         setDeathScreen(!!player.isDead);
 
@@ -1095,6 +1147,7 @@
         renderInventory(data.inventory);
         updateShieldVisual(data);
         updateShopUiFromWorld(data);
+        applyHitFlashVisuals();
 
         setStatus(`Level: ${data.level} | Sections: ${data.activeSections.length} | Enemies: ${data.enemies.length} | Bosses: ${(data.bosses || []).length} | Chests: ${(data.chests || []).length} | Shops: ${(data.shops || []).length}`);
       }
@@ -1442,6 +1495,7 @@
 
       scene.onBeforeRenderObservable.add(() => {
         updateMovement();
+        applyHitFlashVisuals();
       });
 
       scene.onAfterRenderObservable.add(() => {
