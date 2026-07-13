@@ -190,7 +190,7 @@ const ENEMY_ATTACK_DAMAGE = 1;
 const ENEMY_ATTACK_COOLDOWN_MS = 333;
 const ENEMY_AGGRO_RANGE = 100;
 const ENEMY_ATTACK_RANGE = 9;
-const ENEMY_MOVE_PER_TICK = 21;
+const ENEMY_MOVE_PER_TICK = 4.2;
 const BOSS_ATTACK_RANGE = 25;
 const BOSS_ATTACK_DAMAGE = 10;
 const BOSS_ATTACK_CONTACT_RANGE = 12;
@@ -198,7 +198,7 @@ const BOSS_PILLAR_SPAWN_RANGE = 30;
 const BOSS_KILL_XP_REWARD = 200;
 const BOSS_KILL_GOLD_REWARD = 120;
 const BOSS_TRIGGER_RANGE = 8;
-const BOSS_MOVE_PER_TICK = 15;
+const BOSS_MOVE_PER_TICK = 3;
 const CHEST_OPEN_RANGE = 14;
 const CHEST_RESPAWN_MS = 30000;
 const INVENTORY_SLOT_COUNT = 10;
@@ -215,6 +215,7 @@ const STRUCTURE_COLLISION_RADIUS = 15;
 const SPAWN_RESOLVE_TRIES = 14;
 const PLAYER_COLLISION_RADIUS = 10;
 const PORTAL_TRIGGER_RANGE = 12;
+const WORLD_TICK_MS = 200;
 
 const TOOL_CONFIG: Record<ToolId, ToolStats> = {
   sword: { id: "sword", name: "Sword", damage: 5, cooldownMs: 333 },
@@ -1488,7 +1489,7 @@ setInterval(() => {
   tickActiveEnemies();
   tickActiveBosses();
   tickChestRespawns();
-}, 1000);
+}, WORLD_TICK_MS);
 
 type AuthRequest = Request & { user?: { username: string; role: UserRole } };
 
