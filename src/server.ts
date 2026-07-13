@@ -405,7 +405,7 @@ function createShops(): void {
       name: "Harbor Smith",
       x: 120,
       y: 40,
-      obsidianPrice: 25,
+      obsidianPrice: Math.floor(45 + Math.random() * 31),
       healthTotemPrice: 6,
       shieldTotemPrice: 8
     },
@@ -414,7 +414,7 @@ function createShops(): void {
       name: "Cave Forge",
       x: -220,
       y: 180,
-      obsidianPrice: 100,
+      obsidianPrice: Math.floor(45 + Math.random() * 31),
       healthTotemPrice: 9,
       shieldTotemPrice: 10
     }
@@ -725,9 +725,18 @@ function overlapsPlayers(pos: Vec2, ignoreUsername?: string): boolean {
   return false;
 }
 
+function overlapsShops(pos: Vec2, radius = STRUCTURE_COLLISION_RADIUS): boolean {
+  for (const shop of shops.values()) {
+    if (distance(pos, { x: shop.x, y: shop.y }) < radius) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function isBlockedForPlayer(pos: Vec2, username: string): boolean {
   return (
-    overlapsStructure(pos, STRUCTURE_COLLISION_RADIUS) ||
+    overlapsShops(pos, STRUCTURE_COLLISION_RADIUS) ||
     overlapsEntities(pos, ENTITY_COLLISION_RADIUS) ||
     overlapsPlayers(pos, username)
   );
