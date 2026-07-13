@@ -1442,20 +1442,30 @@ app.post("/api/world/move", requireAuth, (req: AuthRequest, res: Response) => {
 
   const moveDistance = distance({ x: player.x, y: player.y }, { x: nextX, y: nextY });
   if (moveDistance > MAX_MOVE_PER_REQUEST) {
-    res.status(400).json({
-      error: `Move too large. Max allowed per request is ${MAX_MOVE_PER_REQUEST} feet.`
+    res.json({
+      message: `Move blocked: max ${MAX_MOVE_PER_REQUEST} feet per request.`,
+      blocked: true,
+      ...buildWorldState(username)
     });
     return;
   }
 
-  const safeMove = findNearestOpenPlayerPosition({ x: nextX, y: nextY }, username);
-  if (!safeMove) {
-    res.status(400).json({ error: "Blocked by entities or structures." });
+  const target = {
+    x: clamp(nextX, -WORLD_LIMIT, WORLD_LIMIT),
+    y: clamp(nextY, -WORLD_LIMIT, WORLD_LIMIT)
+  };
+
+  if (isBlockedForPlayer(target, username)) {
+    res.json({
+      message: "Move blocked by an entity or structure.",
+      blocked: true,
+      ...buildWorldState(username)
+    });
     return;
   }
 
-  player.x = safeMove.x;
-  player.y = safeMove.y;
+  player.x = target.x;
+  player.y = target.y;
   res.json({ message: "Move accepted", ...buildWorldState(username) });
 });
 
