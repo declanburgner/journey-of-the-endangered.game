@@ -112,6 +112,18 @@ type BossState = {
   triggerY: number;
 };
 
+type LavaTrollState = {
+  id: string;
+  level: LevelId;
+  sectionKey: string;
+  x: number;
+  y: number;
+  health: number;
+  maxHealth: number;
+  isAlive: boolean;
+  lastAttackAtMs: number;
+};
+
 type ChestState = {
   id: string;
   level: LevelId;
@@ -199,6 +211,12 @@ const BOSS_KILL_XP_REWARD = 200;
 const BOSS_KILL_GOLD_REWARD = 120;
 const BOSS_TRIGGER_RANGE = 8;
 const BOSS_MOVE_PER_TICK = 3;
+const LAVA_TROLL_SPAWN_MS = 60000;
+const LAVA_TROLL_HEALTH = 50;
+const LAVA_TROLL_ATTACK_DAMAGE = 7;
+const LAVA_TROLL_ATTACK_RANGE = 10;
+const LAVA_TROLL_ATTACK_COOLDOWN_MS = 600;
+const LAVA_TROLL_MOVE_PER_TICK = 2.4;
 const CHEST_OPEN_RANGE = 14;
 const CHEST_RESPAWN_MS = 30000;
 const INVENTORY_SLOT_COUNT = 10;
@@ -268,6 +286,7 @@ const players = new Map<string, PlayerState>();
 const sectionsByLevel = new Map<LevelId, Map<string, Section>>();
 const enemies = new Map<string, EnemyState>();
 const bosses = new Map<string, BossState>();
+const lavaTrolls = new Map<string, LavaTrollState>();
 const chests = new Map<string, ChestState>();
 const shops = new Map<string, ShopState>();
 const portals = new Map<string, PortalState>();
@@ -285,6 +304,8 @@ const reportEvents: ReportEvent[] = [];
 let groupCounter = 1;
 let newsCounter = 2;
 let reportCounter = 1;
+let lavaTrollCounter = 1;
+let lastLavaTrollSpawnAtMs = 0;
 
 function getUserRole(username: string): UserRole {
   return username === ADMIN_USERNAME ? "admin" : "player";
@@ -873,6 +894,15 @@ function overlapsEntitiesOnLevel(
     }
   }
 
+  for (const troll of lavaTrolls.values()) {
+    if (!troll.isAlive || troll.level !== level) {
+      continue;
+    }
+    if (distance(pos, { x: troll.x, y: troll.y }) < radius) {
+      return true;
+    }
+  }
+
   return false;
 }
 
@@ -1102,6 +1132,26 @@ function getVisibleBosses(level: LevelId, activeSectionKeys: string[]): BossStat
   return visible;
 }
 
+function getVisibleLavaTrolls(level: LevelId, activeSectionKeys: string[]): LavaTrollState[] {
+  const activeSet = new Set(activeSectionKeys);
+  const visible: LavaTrollState[] = [];
+
+  for (const troll of lavaTrolls.values()) {
+    if (troll.level !== level) {
+      continue;
+    }
+    if (!troll.isAlive) {
+      continue;
+    }
+    if (!activeSet.has(troll.sectionKey)) {
+      continue;
+    }
+    visible.push(troll);
+  }
+
+  return visible;
+}
+
 function getVisibleChests(level: LevelId, activeSectionKeys: string[]): ChestState[] {
   const activeSet = new Set(activeSectionKeys);
   const visible: ChestState[] = [];
@@ -1212,6 +1262,7 @@ function buildWorldState(username: string): {
   activeSections: string[];
   enemies: EnemyState[];
   bosses: BossState[];
+  lavaTrolls: LavaTrollState[];
   chests: ChestState[];
   shops: ShopState[];
   portals: PortalState[];
@@ -1229,6 +1280,7 @@ function buildWorldState(username: string): {
     activeSections,
     enemies: getVisibleEnemies(player.level, activeSections),
     bosses: getVisibleBosses(player.level, activeSections),
+    lavaTrolls: getVisibleLavaTrolls(player.level, activeSections),
     chests: getVisibleChests(player.level, activeSections),
     shops: getVisibleShops(player.level, activeSections),
     portals: Array.from(portals.values()).filter((p) => p.level === player.level),
@@ -1413,6 +1465,101 @@ function tickChestRespawns(): void {
   }
 }
 
+function spawnLavaTrollInCave(activeCaveSections: Set<string>, now: number): void {
+  if (activeCaveSections.size === 0) {
+    return;
+  }
+
+  const sectionKeys = Array.from(activeCaveSections);
+  const chosenKey = sectionKeys[Math.floor(Math.random() * sectionKeys.length)];
+  const section = getSectionsForLevel("cave").get(chosenKey);
+  if (!section) {
+    return;
+  }
+
+  let candidate = {
+    x: clamp(section.center.x + (Math.random() - 0.5) * (SECTION_SIZE * 0.7), -LEVEL_WORLD_LIMIT.cave, LEVEL_WORLD_LIMIT.cave),
+    y: clamp(section.center.y + (Math.random() - 0.5) * (SECTION_SIZE * 0.7), -LEVEL_WORLD_LIMIT.cave, LEVEL_WORLD_LIMIT.cave)
+  };
+
+  for (let i = 0; i < SPAWN_RESOLVE_TRIES; i += 1) {
+    if (!overlapsStructureOnLevel("cave", candidate) && !overlapsEntitiesOnLevel("cave", candidate, ENTITY_COLLISION_RADIUS + 2)) {
+      break;
+    }
+    candidate = {
+      x: clamp(section.center.x + (Math.random() - 0.5) * (SECTION_SIZE * 0.7), -LEVEL_WORLD_LIMIT.cave, LEVEL_WORLD_LIMIT.cave),
+      y: clamp(section.center.y + (Math.random() - 0.5) * (SECTION_SIZE * 0.7), -LEVEL_WORLD_LIMIT.cave, LEVEL_WORLD_LIMIT.cave)
+    };
+  }
+
+  const id = `lava-troll-${lavaTrollCounter}`;
+  lavaTrollCounter += 1;
+  lavaTrolls.set(id, {
+    id,
+    level: "cave",
+    sectionKey: getSectionKeyForPositionOnLevel("cave", candidate.x, candidate.y),
+    x: candidate.x,
+    y: candidate.y,
+    health: LAVA_TROLL_HEALTH,
+    maxHealth: LAVA_TROLL_HEALTH,
+    isAlive: true,
+    lastAttackAtMs: 0
+  });
+  lastLavaTrollSpawnAtMs = now;
+}
+
+function tickLavaTrollsAndProjectiles(): void {
+  const now = Date.now();
+  const activeCaveSections = getGlobalActiveSectionKeys("cave");
+
+  const activeTrollCount = Array.from(lavaTrolls.values()).filter((t) => t.isAlive).length;
+  if (activeCaveSections.size > 0 && activeTrollCount < 1 && now - lastLavaTrollSpawnAtMs >= LAVA_TROLL_SPAWN_MS) {
+    spawnLavaTrollInCave(activeCaveSections, now);
+  }
+
+  for (const troll of lavaTrolls.values()) {
+    if (!troll.isAlive || troll.level !== "cave") {
+      continue;
+    }
+    if (!activeCaveSections.has(troll.sectionKey)) {
+      continue;
+    }
+
+    const nearestPlayer = getNearestPlayerOnLevel("cave", { x: troll.x, y: troll.y }, WORLD_LIMIT * 2);
+    if (!nearestPlayer) {
+      continue;
+    }
+
+    const playerPos = { x: nearestPlayer.x, y: nearestPlayer.y };
+    const currentDistance = distance({ x: troll.x, y: troll.y }, playerPos);
+
+    if (currentDistance > LAVA_TROLL_ATTACK_RANGE) {
+      const nextPos = steerAroundStructuresAndEntities(
+        { x: troll.x, y: troll.y },
+        playerPos,
+        LAVA_TROLL_MOVE_PER_TICK
+      );
+      const distanceAfterMove = distance(nextPos, playerPos);
+      if (!(isShieldActive(nearestPlayer) && distanceAfterMove <= SHIELD_BLOCK_RADIUS)) {
+        troll.x = clamp(nextPos.x, -LEVEL_WORLD_LIMIT.cave, LEVEL_WORLD_LIMIT.cave);
+        troll.y = clamp(nextPos.y, -LEVEL_WORLD_LIMIT.cave, LEVEL_WORLD_LIMIT.cave);
+        troll.sectionKey = getSectionKeyForPositionOnLevel("cave", troll.x, troll.y);
+      }
+    }
+
+    const attackDistance = distance({ x: troll.x, y: troll.y }, playerPos);
+    if (attackDistance <= LAVA_TROLL_ATTACK_RANGE && !(isShieldActive(nearestPlayer) && attackDistance <= SHIELD_BLOCK_RADIUS)) {
+      if (now - troll.lastAttackAtMs >= LAVA_TROLL_ATTACK_COOLDOWN_MS) {
+        troll.lastAttackAtMs = now;
+        nearestPlayer.health = Math.max(0, nearestPlayer.health - LAVA_TROLL_ATTACK_DAMAGE);
+        if (nearestPlayer.health === 0) {
+          handlePlayerDeath(nearestPlayer);
+        }
+      }
+    }
+  }
+}
+
 function processPlayerPortalTransitions(): void {
   for (const player of players.values()) {
     if (player.isDead || !isPlayerActive(player)) {
@@ -1488,6 +1635,7 @@ setInterval(() => {
   processPlayerPortalTransitions();
   tickActiveEnemies();
   tickActiveBosses();
+  tickLavaTrollsAndProjectiles();
   tickChestRespawns();
 }, WORLD_TICK_MS);
 
@@ -2241,6 +2389,80 @@ app.post("/api/combat/attack-boss", requireAuth, (req: AuthRequest, res: Respons
       defeated,
       rewards: defeated ? { xp: BOSS_KILL_XP_REWARD, gold: BOSS_KILL_GOLD_REWARD } : null,
       autoRespawnMs: boss.respawnMs
+    },
+    ...buildWorldState(username)
+  });
+});
+
+app.post("/api/combat/attack-semi-boss", requireAuth, (req: AuthRequest, res: Response) => {
+  const username = req.user?.username;
+  if (!username) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const player = getOrCreatePlayer(username);
+  if (player.isDead) {
+    res.status(400).json({ error: "You died. Press space to play again." });
+    return;
+  }
+  if (!player.equippedTool) {
+    res.status(400).json({ error: "No equipped tool. Select a slot with a tool." });
+    return;
+  }
+
+  const lavaTrollId = String(req.body?.lavaTrollId ?? "");
+  if (!lavaTrollId) {
+    res.status(400).json({ error: "lavaTrollId is required" });
+    return;
+  }
+
+  const troll = lavaTrolls.get(lavaTrollId);
+  if (!troll || !troll.isAlive) {
+    res.status(404).json({ error: "Lava troll not found or already defeated" });
+    return;
+  }
+  if (troll.level !== player.level) {
+    res.status(400).json({ error: "Lava troll is in a different level." });
+    return;
+  }
+
+  const weapon = TOOL_CONFIG[player.equippedTool];
+  const now = Date.now();
+  const readyAt = player.lastAttackAt + weapon.cooldownMs;
+  if (now < readyAt) {
+    res.status(429).json({
+      error: `Weapon cooldown active for ${Math.ceil((readyAt - now) / 100) / 10}s.`
+    });
+    return;
+  }
+
+  const range = distance({ x: player.x, y: player.y }, { x: troll.x, y: troll.y });
+  if (range > ATTACK_RANGE) {
+    res.status(400).json({ error: `Lava troll is out of range. Move closer than ${ATTACK_RANGE} feet.` });
+    return;
+  }
+
+  troll.health = Math.max(0, troll.health - weapon.damage);
+  player.lastAttackAt = now;
+  let defeated = false;
+  if (troll.health === 0) {
+    defeated = true;
+    troll.isAlive = false;
+    player.xp += 25;
+    player.gold += 25;
+  }
+
+  res.json({
+    message: defeated ? "Lava troll defeated" : "Lava troll hit landed",
+    combat: {
+      lavaTrollId: troll.id,
+      lavaTrollHealth: troll.health,
+      weapon: weapon.name,
+      damage: weapon.damage,
+      cooldownMs: weapon.cooldownMs,
+      defeated,
+      rewards: defeated ? { xp: 25, gold: 25 } : null
     },
     ...buildWorldState(username)
   });

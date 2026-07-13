@@ -378,6 +378,7 @@
 
       const enemyMeshes = new Map();
       const bossMeshes = new Map();
+      const lavaTrollMeshes = new Map();
       const chestMeshes = new Map();
       const shopMeshes = new Map();
       const portalMeshes = new Map();
@@ -939,6 +940,25 @@
         mesh.position.z = boss.y;
       }
 
+      function upsertLavaTrollMesh(troll) {
+        let mesh = lavaTrollMeshes.get(troll.id);
+        if (!mesh) {
+          mesh = BABYLON.MeshBuilder.CreateCylinder(
+            troll.id,
+            { diameterTop: 7, diameterBottom: 9, height: 12, tessellation: 16 },
+            scene
+          );
+          const mat = new BABYLON.StandardMaterial(`lava-troll-mat-${troll.id}`, scene);
+          mat.diffuseColor = new BABYLON.Color3(0.72, 0.34, 0.18);
+          mat.emissiveColor = new BABYLON.Color3(0.14, 0.05, 0.02);
+          mesh.material = mat;
+          lavaTrollMeshes.set(troll.id, mesh);
+        }
+        mesh.position.x = troll.x;
+        mesh.position.y = 6;
+        mesh.position.z = troll.y;
+      }
+
       function upsertChestMesh(chest) {
         let mesh = chestMeshes.get(chest.id);
         if (!mesh) {
@@ -1000,7 +1020,7 @@
         mesh.position.z = portal.y;
       }
 
-      function cleanupMissingMeshes(liveEnemies, liveBosses, liveChests, liveShops, livePortals) {
+      function cleanupMissingMeshes(liveEnemies, liveBosses, liveLavaTrolls, liveChests, liveShops, livePortals) {
         const liveEnemyIds = new Set(liveEnemies.map((e) => e.id));
         for (const [id, mesh] of enemyMeshes) {
           if (!liveEnemyIds.has(id)) {
@@ -1016,6 +1036,14 @@
             mesh.dispose();
             bossMeshes.delete(id);
             bossHitFlashUntilMs.delete(id);
+          }
+        }
+
+        const liveLavaTrollIds = new Set(liveLavaTrolls.map((t) => t.id));
+        for (const [id, mesh] of lavaTrollMeshes) {
+          if (!liveLavaTrollIds.has(id)) {
+            mesh.dispose();
+            lavaTrollMeshes.delete(id);
           }
         }
 
@@ -1128,6 +1156,9 @@
         for (const boss of data.bosses || []) {
           upsertBossMesh(boss);
         }
+        for (const troll of data.lavaTrolls || []) {
+          upsertLavaTrollMesh(troll);
+        }
         for (const chest of data.chests || []) {
           upsertChestMesh(chest);
         }
@@ -1140,6 +1171,7 @@
         cleanupMissingMeshes(
           data.enemies,
           data.bosses || [],
+          data.lavaTrolls || [],
           data.chests || [],
           data.shops || [],
           data.portals || []
@@ -1149,7 +1181,7 @@
         updateShopUiFromWorld(data);
         applyHitFlashVisuals();
 
-        setStatus(`Level: ${data.level} | Sections: ${data.activeSections.length} | Enemies: ${data.enemies.length} | Bosses: ${(data.bosses || []).length} | Chests: ${(data.chests || []).length} | Shops: ${(data.shops || []).length}`);
+        setStatus(`Level: ${data.level} | Sections: ${data.activeSections.length} | Enemies: ${data.enemies.length} | Bosses: ${(data.bosses || []).length} | Lava Trolls: ${(data.lavaTrolls || []).length} | Chests: ${(data.chests || []).length} | Shops: ${(data.shops || []).length}`);
       }
 
       async function api(path, method = "GET", body = null) {
@@ -1325,6 +1357,13 @@
             const data = await api("/api/combat/attack-boss", "POST", { bossId: targetId });
             renderWorldState(data);
             setStatus(`Boss hit: ${targetId}`);
+            return;
+          }
+
+          if (lavaTrollMeshes.has(targetId)) {
+            const data = await api("/api/combat/attack-semi-boss", "POST", { lavaTrollId: targetId });
+            renderWorldState(data);
+            setStatus(`Lava troll hit: ${targetId}`);
             return;
           }
 
