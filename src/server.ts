@@ -395,7 +395,7 @@ function createBosses(): void {
       structureName: "Hydra Lake",
       x: 360,
       y: 340,
-      maxHealth: 50,
+      maxHealth: 500,
       respawnMs: 45000,
       triggerX: 420,
       triggerY: 300
@@ -407,7 +407,7 @@ function createBosses(): void {
       structureName: "Cyclops Cave",
       x: -430,
       y: -320,
-      maxHealth: 50,
+      maxHealth: 500,
       respawnMs: 60000,
       triggerX: -500,
       triggerY: -260
