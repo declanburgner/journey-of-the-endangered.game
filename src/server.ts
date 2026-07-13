@@ -187,10 +187,10 @@ const KILL_XP_REWARD = 25;
 const KILL_GOLD_REWARD = 10;
 const ENEMY_RESPAWN_MS = 10000;
 const ENEMY_ATTACK_DAMAGE = 1;
-const ENEMY_ATTACK_COOLDOWN_MS = 1000;
+const ENEMY_ATTACK_COOLDOWN_MS = 333;
 const ENEMY_AGGRO_RANGE = 100;
 const ENEMY_ATTACK_RANGE = 9;
-const ENEMY_MOVE_PER_TICK = 7;
+const ENEMY_MOVE_PER_TICK = 21;
 const BOSS_ATTACK_RANGE = 25;
 const BOSS_ATTACK_DAMAGE = 10;
 const BOSS_ATTACK_CONTACT_RANGE = 12;
@@ -198,7 +198,7 @@ const BOSS_PILLAR_SPAWN_RANGE = 30;
 const BOSS_KILL_XP_REWARD = 200;
 const BOSS_KILL_GOLD_REWARD = 120;
 const BOSS_TRIGGER_RANGE = 8;
-const BOSS_MOVE_PER_TICK = 5;
+const BOSS_MOVE_PER_TICK = 15;
 const CHEST_OPEN_RANGE = 14;
 const CHEST_RESPAWN_MS = 30000;
 const INVENTORY_SLOT_COUNT = 10;
@@ -217,27 +217,27 @@ const PLAYER_COLLISION_RADIUS = 10;
 const PORTAL_TRIGGER_RANGE = 12;
 
 const TOOL_CONFIG: Record<ToolId, ToolStats> = {
-  sword: { id: "sword", name: "Sword", damage: 5, cooldownMs: 1000 },
-  mace: { id: "mace", name: "Mace", damage: 7, cooldownMs: 700 },
-  pickaxe: { id: "pickaxe", name: "Pickaxe", damage: 6, cooldownMs: 500 },
-  "diamond-mace": { id: "diamond-mace", name: "Diamond Mace", damage: 9, cooldownMs: 600 },
+  sword: { id: "sword", name: "Sword", damage: 5, cooldownMs: 333 },
+  mace: { id: "mace", name: "Mace", damage: 7, cooldownMs: 233 },
+  pickaxe: { id: "pickaxe", name: "Pickaxe", damage: 6, cooldownMs: 167 },
+  "diamond-mace": { id: "diamond-mace", name: "Diamond Mace", damage: 8, cooldownMs: 200 },
   "diamond-pickaxe": {
     id: "diamond-pickaxe",
     name: "Diamond Pickaxe",
-    damage: 8,
-    cooldownMs: 400
+    damage: 7,
+    cooldownMs: 133
   },
   "diamond-sword": {
     id: "diamond-sword",
     name: "Diamond Sword",
     damage: 10,
-    cooldownMs: 700
+    cooldownMs: 233
   },
   "obsidian-sword": {
     id: "obsidian-sword",
     name: "Obsidian Sword",
     damage: 12,
-    cooldownMs: 650
+    cooldownMs: 217
   }
 };
 
@@ -509,9 +509,7 @@ function createPortals(): void {
   });
 
   const skyHoleSeeds: Array<{ id: string; x: number; y: number }> = [
-    { id: "sky-hole-1", x: 20, y: 30 },
-    { id: "sky-hole-2", x: -140, y: -90 },
-    { id: "sky-hole-3", x: 180, y: -160 }
+    { id: "sky-hole-1", x: 20, y: 30 }
   ];
 
   for (const seed of skyHoleSeeds) {
@@ -521,8 +519,8 @@ function createPortals(): void {
       x: seed.x,
       y: seed.y,
       targetLevel: "surface",
-      targetX: sinkholeX + (seed.id === "sky-hole-1" ? 110 : seed.id === "sky-hole-2" ? -95 : 35),
-      targetY: sinkholeY + (seed.id === "sky-hole-1" ? 60 : seed.id === "sky-hole-2" ? 95 : -110),
+      targetX: sinkholeX + 110,
+      targetY: sinkholeY + 60,
       kind: "sky-hole"
     });
   }
