@@ -378,6 +378,9 @@
       const bossMeshes = new Map();
       const chestMeshes = new Map();
       const shopMeshes = new Map();
+      const portalMeshes = new Map();
+      const surfaceBiomeMeshes = [];
+      const caveBiomeMeshes = [];
       let shieldCube = null;
 
       const hiddenButtons = [
@@ -645,6 +648,7 @@
         trunk.position.x = x;
         trunk.position.y = 8;
         trunk.position.z = z;
+        surfaceBiomeMeshes.push(trunk);
 
         const leaves = BABYLON.MeshBuilder.CreateSphere(
           `forest-tree-leaves-${index}`,
@@ -658,6 +662,7 @@
         leaves.position.x = x;
         leaves.position.y = 18;
         leaves.position.z = z;
+        surfaceBiomeMeshes.push(leaves);
       }
 
       function spawnForestBush(x, z, index) {
@@ -673,6 +678,54 @@
         bush.position.x = x;
         bush.position.y = 3.5;
         bush.position.z = z;
+        surfaceBiomeMeshes.push(bush);
+      }
+
+      function spawnCaveLimestone(x, z, index) {
+        const baseDiameter = 8 + seededNoise(index * 3.1 + 77) * 5;
+        const height = 20 + seededNoise(index * 4.7 + 91) * 14;
+        const spire = BABYLON.MeshBuilder.CreateCylinder(
+          `cave-limestone-spire-${index}`,
+          { diameterTop: 0.25, diameterBottom: baseDiameter, height, tessellation: 4 },
+          scene
+        );
+        const spireMat = new BABYLON.StandardMaterial(`cave-limestone-spire-mat-${index}`, scene);
+        spireMat.diffuseColor = new BABYLON.Color3(0.43, 0.39, 0.34);
+        spireMat.specularColor = new BABYLON.Color3(0.07, 0.07, 0.07);
+        spire.material = spireMat;
+        spire.position.x = x;
+        spire.position.y = height / 2;
+        spire.position.z = z;
+        spire.rotation.y = seededNoise(index * 5.3 + 17) * Math.PI;
+        caveBiomeMeshes.push(spire);
+      }
+
+      function spawnCaveRock(x, z, index) {
+        const radius = 2.8 + seededNoise(index * 2.9 + 41) * 2.2;
+        const rock = BABYLON.MeshBuilder.CreateDisc(
+          `cave-rock-${index}`,
+          { radius, tessellation: 20 },
+          scene
+        );
+        rock.rotation.x = Math.PI / 2;
+        rock.position.x = x;
+        rock.position.y = 0.22;
+        rock.position.z = z;
+
+        const rockMat = new BABYLON.StandardMaterial(`cave-rock-mat-${index}`, scene);
+        rockMat.diffuseColor = new BABYLON.Color3(0.2, 0.2, 0.22);
+        rockMat.emissiveColor = new BABYLON.Color3(0.03, 0.03, 0.04);
+        rock.material = rockMat;
+        caveBiomeMeshes.push(rock);
+      }
+
+      function setBiomeVisibility(isCave) {
+        for (const mesh of surfaceBiomeMeshes) {
+          mesh.setEnabled(!isCave);
+        }
+        for (const mesh of caveBiomeMeshes) {
+          mesh.setEnabled(isCave);
+        }
       }
 
       function setupBiomes() {
@@ -713,6 +766,7 @@
             }
             usedPositions.push(pos);
             spawnForestTree(pos.x, pos.z, i);
+            spawnCaveLimestone(pos.x, pos.z, i);
           }
 
           for (let i = 0; i < biome.bushCount; i += 1) {
@@ -722,8 +776,11 @@
             }
             usedPositions.push(pos);
             spawnForestBush(pos.x, pos.z, i);
+            spawnCaveRock(pos.x, pos.z, i);
           }
         }
+
+        setBiomeVisibility(false);
       }
 
       function shortToolLabel(toolName) {
@@ -879,7 +936,35 @@
         mesh.position.z = shop.y;
       }
 
-      function cleanupMissingMeshes(liveEnemies, liveBosses, liveChests, liveShops) {
+      function upsertPortalMesh(portal) {
+        let mesh = portalMeshes.get(portal.id);
+        if (!mesh) {
+          if (portal.kind === "sinkhole") {
+            mesh = BABYLON.MeshBuilder.CreateDisc(portal.id, { radius: 9, tessellation: 40 }, scene);
+            mesh.rotation.x = Math.PI / 2;
+          } else {
+            mesh = BABYLON.MeshBuilder.CreateDisc(portal.id, { radius: 8, tessellation: 32 }, scene);
+            mesh.rotation.x = Math.PI / 2;
+          }
+
+          const mat = new BABYLON.StandardMaterial(`portal-mat-${portal.id}`, scene);
+          if (portal.kind === "sinkhole") {
+            mat.diffuseColor = new BABYLON.Color3(0.04, 0.04, 0.05);
+            mat.emissiveColor = new BABYLON.Color3(0.02, 0.02, 0.03);
+          } else {
+            mat.diffuseColor = new BABYLON.Color3(0.5, 0.82, 1);
+            mat.emissiveColor = new BABYLON.Color3(0.25, 0.6, 0.9);
+          }
+          mesh.material = mat;
+          portalMeshes.set(portal.id, mesh);
+        }
+
+        mesh.position.x = portal.x;
+        mesh.position.y = 0.15;
+        mesh.position.z = portal.y;
+      }
+
+      function cleanupMissingMeshes(liveEnemies, liveBosses, liveChests, liveShops, livePortals) {
         const liveEnemyIds = new Set(liveEnemies.map((e) => e.id));
         for (const [id, mesh] of enemyMeshes) {
           if (!liveEnemyIds.has(id)) {
@@ -909,6 +994,14 @@
           if (!liveShopIds.has(id)) {
             mesh.dispose();
             shopMeshes.delete(id);
+          }
+        }
+
+        const livePortalIds = new Set(livePortals.map((p) => p.id));
+        for (const [id, mesh] of portalMeshes) {
+          if (!livePortalIds.has(id)) {
+            mesh.dispose();
+            portalMeshes.delete(id);
           }
         }
       }
@@ -946,6 +1039,22 @@
           triggerHitFog();
         }
 
+        if (data.level === "cave") {
+          scene.clearColor = new BABYLON.Color4(0.18, 0.18, 0.2, 1);
+          groundMat.diffuseColor = new BABYLON.Color3(0.18, 0.18, 0.2);
+          skyMat.diffuseColor = new BABYLON.Color3(0.25, 0.25, 0.27);
+          skyMat.emissiveColor = new BABYLON.Color3(0.2, 0.2, 0.22);
+          hemi.intensity = 0.35;
+          setBiomeVisibility(true);
+        } else {
+          scene.clearColor = new BABYLON.Color4(0.83, 0.94, 1, 1);
+          groundMat.diffuseColor = new BABYLON.Color3(0.14, 0.22, 0.17);
+          skyMat.diffuseColor = new BABYLON.Color3(0.84, 0.94, 1);
+          skyMat.emissiveColor = new BABYLON.Color3(0.84, 0.94, 1);
+          hemi.intensity = 0.85;
+          setBiomeVisibility(false);
+        }
+
         camera.position.x = player.x;
         camera.position.z = player.y;
         const tool = TOOL_STATS[player.equippedTool] ?? TOOL_STATS.sword;
@@ -971,12 +1080,21 @@
         for (const shop of data.shops || []) {
           upsertShopMesh(shop);
         }
-        cleanupMissingMeshes(data.enemies, data.bosses || [], data.chests || [], data.shops || []);
+        for (const portal of data.portals || []) {
+          upsertPortalMesh(portal);
+        }
+        cleanupMissingMeshes(
+          data.enemies,
+          data.bosses || [],
+          data.chests || [],
+          data.shops || [],
+          data.portals || []
+        );
         renderInventory(data.inventory);
         updateShieldVisual(data);
         updateShopUiFromWorld(data);
 
-        setStatus(`Sections active: ${data.activeSections.length} | Enemies: ${data.enemies.length} | Bosses: ${(data.bosses || []).length} | Chests: ${(data.chests || []).length} | Shops: ${(data.shops || []).length}`);
+        setStatus(`Level: ${data.level} | Sections: ${data.activeSections.length} | Enemies: ${data.enemies.length} | Bosses: ${(data.bosses || []).length} | Chests: ${(data.chests || []).length} | Shops: ${(data.shops || []).length}`);
       }
 
       async function api(path, method = "GET", body = null) {
@@ -1027,6 +1145,9 @@
 
       async function checkHiddenButtonRespawn() {
         if (!worldState || Date.now() < buttonRespawnCooldownUntil) {
+          return;
+        }
+        if (worldState.level !== "surface") {
           return;
         }
 

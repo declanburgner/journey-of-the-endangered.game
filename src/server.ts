@@ -20,11 +20,13 @@ type UserRecord = {
 };
 
 type UserRole = "admin" | "player";
+type LevelId = "surface" | "cave";
 
 type Vec2 = { x: number; y: number };
 
 type PlayerState = {
   username: string;
+  level: LevelId;
   x: number;
   y: number;
   health: number;
@@ -81,6 +83,7 @@ type Section = {
 
 type EnemyState = {
   id: string;
+  level: LevelId;
   sectionKey: string;
   x: number;
   y: number;
@@ -92,6 +95,7 @@ type EnemyState = {
 
 type BossState = {
   id: string;
+  level: LevelId;
   name: string;
   structureName: string;
   sectionKey: string;
@@ -110,6 +114,7 @@ type BossState = {
 
 type ChestState = {
   id: string;
+  level: LevelId;
   sectionKey: string;
   x: number;
   y: number;
@@ -119,6 +124,7 @@ type ChestState = {
 
 type ShopState = {
   id: string;
+  level: LevelId;
   name: string;
   sectionKey: string;
   x: number;
@@ -131,6 +137,17 @@ type GroupState = {
   id: string;
   leader: string;
   members: string[];
+};
+
+type PortalState = {
+  id: string;
+  level: LevelId;
+  x: number;
+  y: number;
+  targetLevel: LevelId;
+  targetX: number;
+  targetY: number;
+  kind: "sinkhole" | "sky-hole";
 };
 
 type NewsPost = {
@@ -156,6 +173,10 @@ const JWT_SECRET = process.env.JWT_SECRET ?? "change-this-secret";
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME ?? (process.env.TEST_USER_1_NAME ?? "alice");
 
 const WORLD_LIMIT = 1000;
+const LEVEL_WORLD_LIMIT: Record<LevelId, number> = {
+  surface: WORLD_LIMIT,
+  cave: WORLD_LIMIT
+};
 const SECTION_SIZE = 200;
 const SECTION_ACTIVATION_DISTANCE = 300;
 const MIN_PLAYERS = 1;
@@ -193,6 +214,7 @@ const ENTITY_COLLISION_RADIUS = 9;
 const STRUCTURE_COLLISION_RADIUS = 15;
 const SPAWN_RESOLVE_TRIES = 14;
 const PLAYER_COLLISION_RADIUS = 10;
+const PORTAL_TRIGGER_RANGE = 12;
 
 const TOOL_CONFIG: Record<ToolId, ToolStats> = {
   sword: { id: "sword", name: "Sword", damage: 5, cooldownMs: 1000 },
@@ -242,11 +264,12 @@ const users: UserRecord[] = rawUsers.map((u) => ({
 }));
 
 const players = new Map<string, PlayerState>();
-const sections = new Map<string, Section>();
+const sectionsByLevel = new Map<LevelId, Map<string, Section>>();
 const enemies = new Map<string, EnemyState>();
 const bosses = new Map<string, BossState>();
 const chests = new Map<string, ChestState>();
 const shops = new Map<string, ShopState>();
+const portals = new Map<string, PortalState>();
 const groups = new Map<string, GroupState>();
 const newsPosts: NewsPost[] = [
   {
@@ -284,11 +307,27 @@ function getSectionKeyForPosition(x: number, y: number): string {
   return toSectionKey(gridX, gridY);
 }
 
-function createWorld(): void {
+function getSectionsForLevel(level: LevelId): Map<string, Section> {
+  let sectionMap = sectionsByLevel.get(level);
+  if (!sectionMap) {
+    sectionMap = new Map<string, Section>();
+    sectionsByLevel.set(level, sectionMap);
+  }
+  return sectionMap;
+}
+
+function getSectionKeyForPositionOnLevel(level: LevelId, x: number, y: number): string {
+  const limit = LEVEL_WORLD_LIMIT[level];
+  return getSectionKeyForPosition(clamp(x, -limit, limit), clamp(y, -limit, limit));
+}
+
+function createWorld(level: LevelId): void {
+  const sectionMap = getSectionsForLevel(level);
+  const levelLimit = LEVEL_WORLD_LIMIT[level];
   const minGrid = Math.floor(-WORLD_LIMIT / SECTION_SIZE);
   const maxGrid = Math.floor(WORLD_LIMIT / SECTION_SIZE);
-  let enemyCounter = 1;
-  let chestCounter = 1;
+  let enemyCounter = level === "surface" ? 1 : 10001;
+  let chestCounter = level === "surface" ? 1 : 10001;
 
   for (let gx = minGrid; gx <= maxGrid; gx += 1) {
     for (let gy = minGrid; gy <= maxGrid; gy += 1) {
@@ -298,7 +337,7 @@ function createWorld(): void {
         y: gy * SECTION_SIZE + SECTION_SIZE / 2
       };
       const section: Section = { key, center, enemyIds: [] };
-      sections.set(key, section);
+      sectionMap.set(key, section);
 
       // 4x lower density: only seed enemies in one out of every four sections.
       if ((Math.abs(gx) + Math.abs(gy)) % 4 !== 0) {
@@ -313,9 +352,10 @@ function createWorld(): void {
 
         const enemy: EnemyState = {
           id: enemyId,
+          level,
           sectionKey: key,
-          x: clamp(center.x + offsetX, -WORLD_LIMIT, WORLD_LIMIT),
-          y: clamp(center.y + offsetY, -WORLD_LIMIT, WORLD_LIMIT),
+          x: clamp(center.x + offsetX, -levelLimit, levelLimit),
+          y: clamp(center.y + offsetY, -levelLimit, levelLimit),
           health: 10,
           maxHealth: 10,
           isAlive: true,
@@ -331,9 +371,10 @@ function createWorld(): void {
         chestCounter += 1;
         chests.set(chestId, {
           id: chestId,
+          level,
           sectionKey: key,
-          x: clamp(center.x + (Math.random() - 0.5) * (SECTION_SIZE * 0.5), -WORLD_LIMIT, WORLD_LIMIT),
-          y: clamp(center.y + (Math.random() - 0.5) * (SECTION_SIZE * 0.5), -WORLD_LIMIT, WORLD_LIMIT),
+          x: clamp(center.x + (Math.random() - 0.5) * (SECTION_SIZE * 0.5), -levelLimit, levelLimit),
+          y: clamp(center.y + (Math.random() - 0.5) * (SECTION_SIZE * 0.5), -levelLimit, levelLimit),
           isOpened: false,
           respawnAtMs: null
         });
@@ -342,12 +383,14 @@ function createWorld(): void {
   }
 }
 
-createWorld();
+createWorld("surface");
+createWorld("cave");
 
 function createBosses(): void {
   const seedBosses = [
     {
       id: "boss-hydra",
+      level: "surface" as LevelId,
       name: "Hydra",
       structureName: "Hydra Lake",
       x: 360,
@@ -359,6 +402,7 @@ function createBosses(): void {
     },
     {
       id: "boss-cyclops",
+      level: "cave" as LevelId,
       name: "Cave Cyclops",
       structureName: "Cyclops Cave",
       x: -430,
@@ -371,13 +415,14 @@ function createBosses(): void {
   ];
 
   for (const boss of seedBosses) {
-    const sectionKey = getSectionKeyForPosition(boss.x, boss.y);
-    if (!sections.has(sectionKey)) {
+    const sectionKey = getSectionKeyForPositionOnLevel(boss.level, boss.x, boss.y);
+    if (!getSectionsForLevel(boss.level).has(sectionKey)) {
       continue;
     }
 
     bosses.set(boss.id, {
       id: boss.id,
+      level: boss.level,
       name: boss.name,
       structureName: boss.structureName,
       sectionKey,
@@ -421,9 +466,10 @@ function createShops(): void {
   ];
 
   for (const shop of seedShops) {
-    const sectionKey = getSectionKeyForPosition(shop.x, shop.y);
+    const sectionKey = getSectionKeyForPositionOnLevel("surface", shop.x, shop.y);
     shops.set(shop.id, {
       id: shop.id,
+      level: "surface",
       name: shop.name,
       sectionKey,
       x: shop.x,
@@ -446,6 +492,43 @@ function createShops(): void {
 }
 
 createShops();
+
+function createPortals(): void {
+  const sinkholeX = 60;
+  const sinkholeY = 80;
+  const caveEntry = { x: 95, y: 95 };
+  portals.set("sinkhole-1", {
+    id: "sinkhole-1",
+    level: "surface",
+    x: sinkholeX,
+    y: sinkholeY,
+    targetLevel: "cave",
+    targetX: caveEntry.x,
+    targetY: caveEntry.y,
+    kind: "sinkhole"
+  });
+
+  const skyHoleSeeds: Array<{ id: string; x: number; y: number }> = [
+    { id: "sky-hole-1", x: 20, y: 30 },
+    { id: "sky-hole-2", x: -140, y: -90 },
+    { id: "sky-hole-3", x: 180, y: -160 }
+  ];
+
+  for (const seed of skyHoleSeeds) {
+    portals.set(seed.id, {
+      id: seed.id,
+      level: "cave",
+      x: seed.x,
+      y: seed.y,
+      targetLevel: "surface",
+      targetX: sinkholeX + (seed.id === "sky-hole-1" ? 110 : seed.id === "sky-hole-2" ? -95 : 35),
+      targetY: sinkholeY + (seed.id === "sky-hole-1" ? 60 : seed.id === "sky-hole-2" ? 95 : -110),
+      kind: "sky-hole"
+    });
+  }
+}
+
+createPortals();
 resolveWorldOverlaps();
 
 function getOrCreatePlayer(username: string): PlayerState {
@@ -456,6 +539,7 @@ function getOrCreatePlayer(username: string): PlayerState {
 
   const created: PlayerState = {
     username,
+    level: "surface",
     x: 0,
     y: 0,
     health: 50,
@@ -475,7 +559,8 @@ function getOrCreatePlayer(username: string): PlayerState {
 }
 
 function resetPlayerForNewRun(player: PlayerState): void {
-  const safeStart = findNearestOpenPlayerPosition({ x: 0, y: 0 }, player.username);
+  player.level = "surface";
+  const safeStart = findNearestOpenPlayerPosition({ x: 0, y: 0 }, player.username, player.level);
   player.x = safeStart?.x ?? 0;
   player.y = safeStart?.y ?? 0;
   player.health = 50;
@@ -608,6 +693,28 @@ function getNearestPlayer(position: Vec2, maxRange: number): PlayerState | null 
   return nearest;
 }
 
+function getNearestPlayerOnLevel(level: LevelId, position: Vec2, maxRange: number): PlayerState | null {
+  let nearest: PlayerState | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  for (const player of players.values()) {
+    if (player.level !== level) {
+      continue;
+    }
+    if (player.isDead || !isPlayerActive(player)) {
+      continue;
+    }
+
+    const d = distance(position, { x: player.x, y: player.y });
+    if (d < nearestDistance && d <= maxRange) {
+      nearestDistance = d;
+      nearest = player;
+    }
+  }
+
+  return nearest;
+}
+
 function isPlayerInShopSafeZone(player: PlayerState): boolean {
   for (const shop of shops.values()) {
     if (distance({ x: player.x, y: player.y }, { x: shop.x, y: shop.y }) <= SHOP_INTERACT_RANGE) {
@@ -617,11 +724,14 @@ function isPlayerInShopSafeZone(player: PlayerState): boolean {
   return false;
 }
 
-function getNearestEnemyTargetPlayer(position: Vec2, maxRange: number): PlayerState | null {
+function getNearestEnemyTargetPlayer(level: LevelId, position: Vec2, maxRange: number): PlayerState | null {
   let nearest: PlayerState | null = null;
   let nearestDistance = Number.POSITIVE_INFINITY;
 
   for (const player of players.values()) {
+    if (player.level !== level) {
+      continue;
+    }
     if (player.isDead || !isPlayerActive(player)) {
       continue;
     }
@@ -674,8 +784,37 @@ function structurePositions(): Vec2[] {
   return points;
 }
 
+function structurePositionsForLevel(level: LevelId): Vec2[] {
+  const points: Vec2[] = [];
+  for (const shop of shops.values()) {
+    if (shop.level === level) {
+      points.push({ x: shop.x, y: shop.y });
+    }
+  }
+  for (const chest of chests.values()) {
+    if (chest.level === level) {
+      points.push({ x: chest.x, y: chest.y });
+    }
+  }
+  for (const portal of portals.values()) {
+    if (portal.level === level) {
+      points.push({ x: portal.x, y: portal.y });
+    }
+  }
+  return points;
+}
+
 function overlapsStructure(pos: Vec2, radius = STRUCTURE_COLLISION_RADIUS): boolean {
   for (const s of structurePositions()) {
+    if (distance(pos, s) < radius) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function overlapsStructureOnLevel(level: LevelId, pos: Vec2, radius = STRUCTURE_COLLISION_RADIUS): boolean {
+  for (const s of structurePositionsForLevel(level)) {
     if (distance(pos, s) < radius) {
       return true;
     }
@@ -710,9 +849,52 @@ function overlapsEntities(
   return false;
 }
 
+function overlapsEntitiesOnLevel(
+  level: LevelId,
+  pos: Vec2,
+  radius = ENTITY_COLLISION_RADIUS,
+  selfEnemyId?: string,
+  selfBossId?: string
+): boolean {
+  for (const enemy of enemies.values()) {
+    if (!enemy.isAlive || enemy.level !== level || enemy.id === selfEnemyId) {
+      continue;
+    }
+    if (distance(pos, { x: enemy.x, y: enemy.y }) < radius) {
+      return true;
+    }
+  }
+
+  for (const boss of bosses.values()) {
+    if (!boss.isAlive || boss.level !== level || boss.id === selfBossId) {
+      continue;
+    }
+    if (distance(pos, { x: boss.x, y: boss.y }) < radius) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function overlapsPlayers(pos: Vec2, ignoreUsername?: string): boolean {
   for (const player of players.values()) {
     if (player.username === ignoreUsername) {
+      continue;
+    }
+    if (player.isDead || !isPlayerActive(player)) {
+      continue;
+    }
+    if (distance(pos, { x: player.x, y: player.y }) < PLAYER_COLLISION_RADIUS) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function overlapsPlayersOnLevel(level: LevelId, pos: Vec2, ignoreUsername?: string): boolean {
+  for (const player of players.values()) {
+    if (player.username === ignoreUsername || player.level !== level) {
       continue;
     }
     if (player.isDead || !isPlayerActive(player)) {
@@ -734,21 +916,34 @@ function overlapsShops(pos: Vec2, radius = STRUCTURE_COLLISION_RADIUS): boolean 
   return false;
 }
 
-function isBlockedForPlayer(pos: Vec2, username: string): boolean {
+function overlapsShopsOnLevel(level: LevelId, pos: Vec2, radius = STRUCTURE_COLLISION_RADIUS): boolean {
+  for (const shop of shops.values()) {
+    if (shop.level !== level) {
+      continue;
+    }
+    if (distance(pos, { x: shop.x, y: shop.y }) < radius) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isBlockedForPlayer(pos: Vec2, username: string, level: LevelId): boolean {
   return (
-    overlapsShops(pos, STRUCTURE_COLLISION_RADIUS) ||
-    overlapsEntities(pos, ENTITY_COLLISION_RADIUS) ||
-    overlapsPlayers(pos, username)
+    overlapsShopsOnLevel(level, pos, STRUCTURE_COLLISION_RADIUS) ||
+    overlapsEntitiesOnLevel(level, pos, ENTITY_COLLISION_RADIUS) ||
+    overlapsPlayersOnLevel(level, pos, username)
   );
 }
 
-function findNearestOpenPlayerPosition(start: Vec2, username: string): Vec2 | null {
+function findNearestOpenPlayerPosition(start: Vec2, username: string, level: LevelId): Vec2 | null {
+  const limit = LEVEL_WORLD_LIMIT[level];
   const origin = {
-    x: clamp(start.x, -WORLD_LIMIT, WORLD_LIMIT),
-    y: clamp(start.y, -WORLD_LIMIT, WORLD_LIMIT)
+    x: clamp(start.x, -limit, limit),
+    y: clamp(start.y, -limit, limit)
   };
 
-  if (!isBlockedForPlayer(origin, username)) {
+  if (!isBlockedForPlayer(origin, username, level)) {
     return origin;
   }
 
@@ -758,10 +953,10 @@ function findNearestOpenPlayerPosition(start: Vec2, username: string): Vec2 | nu
     for (let i = 0; i < directions; i += 1) {
       const angle = (i / directions) * Math.PI * 2;
       const candidate = {
-        x: clamp(origin.x + Math.cos(angle) * radius, -WORLD_LIMIT, WORLD_LIMIT),
-        y: clamp(origin.y + Math.sin(angle) * radius, -WORLD_LIMIT, WORLD_LIMIT)
+        x: clamp(origin.x + Math.cos(angle) * radius, -limit, limit),
+        y: clamp(origin.y + Math.sin(angle) * radius, -limit, limit)
       };
-      if (!isBlockedForPlayer(candidate, username)) {
+      if (!isBlockedForPlayer(candidate, username, level)) {
         return candidate;
       }
     }
@@ -815,37 +1010,30 @@ function steerAroundStructuresAndEntities(
 
 function resolveWorldOverlaps(): void {
   for (const enemy of enemies.values()) {
+    const limit = LEVEL_WORLD_LIMIT[enemy.level];
     let placed = { x: enemy.x, y: enemy.y };
     for (let i = 0; i < SPAWN_RESOLVE_TRIES; i += 1) {
-      if (!overlapsStructure(placed) && !overlapsEntities(placed, ENTITY_COLLISION_RADIUS, enemy.id)) {
+      if (
+        !overlapsStructureOnLevel(enemy.level, placed) &&
+        !overlapsEntitiesOnLevel(enemy.level, placed, ENTITY_COLLISION_RADIUS, enemy.id)
+      ) {
         break;
       }
       placed = {
-        x: clamp(placed.x + (Math.random() - 0.5) * 24, -WORLD_LIMIT, WORLD_LIMIT),
-        y: clamp(placed.y + (Math.random() - 0.5) * 24, -WORLD_LIMIT, WORLD_LIMIT)
+        x: clamp(placed.x + (Math.random() - 0.5) * 24, -limit, limit),
+        y: clamp(placed.y + (Math.random() - 0.5) * 24, -limit, limit)
       };
     }
     enemy.x = placed.x;
     enemy.y = placed.y;
-    enemy.sectionKey = getSectionKeyForPosition(enemy.x, enemy.y);
+    enemy.sectionKey = getSectionKeyForPositionOnLevel(enemy.level, enemy.x, enemy.y);
   }
 
   for (const boss of bosses.values()) {
-    let placed = { x: boss.x, y: boss.y };
-    for (let i = 0; i < SPAWN_RESOLVE_TRIES; i += 1) {
-      if (!overlapsStructure(placed) && !overlapsEntities(placed, ENTITY_COLLISION_RADIUS + 4, undefined, boss.id)) {
-        break;
-      }
-      placed = {
-        x: clamp(placed.x + (Math.random() - 0.5) * 28, -WORLD_LIMIT, WORLD_LIMIT),
-        y: clamp(placed.y + (Math.random() - 0.5) * 28, -WORLD_LIMIT, WORLD_LIMIT)
-      };
-    }
-    boss.x = placed.x;
-    boss.y = placed.y;
-    boss.spawnX = placed.x;
-    boss.spawnY = placed.y;
-    boss.sectionKey = getSectionKeyForPosition(boss.x, boss.y);
+    // Keep boss spawn anchors locked to their configured pillar center.
+    boss.x = boss.spawnX;
+    boss.y = boss.spawnY;
+    boss.sectionKey = getSectionKeyForPositionOnLevel(boss.level, boss.x, boss.y);
   }
 }
 
@@ -855,7 +1043,7 @@ function getPlayerActiveSectionKeys(player: PlayerState): string[] {
   }
 
   const active: string[] = [];
-  for (const section of sections.values()) {
+  for (const section of getSectionsForLevel(player.level).values()) {
     if (distance({ x: player.x, y: player.y }, section.center) <= SECTION_ACTIVATION_DISTANCE) {
       active.push(section.key);
     }
@@ -863,20 +1051,26 @@ function getPlayerActiveSectionKeys(player: PlayerState): string[] {
   return active;
 }
 
-function getGlobalActiveSectionKeys(): Set<string> {
+function getGlobalActiveSectionKeys(level: LevelId): Set<string> {
   const keys = new Set<string>();
   for (const player of players.values()) {
+    if (player.level !== level) {
+      continue;
+    }
     const activeForPlayer = getPlayerActiveSectionKeys(player);
     activeForPlayer.forEach((key) => keys.add(key));
   }
   return keys;
 }
 
-function getVisibleEnemies(activeSectionKeys: string[]): EnemyState[] {
+function getVisibleEnemies(level: LevelId, activeSectionKeys: string[]): EnemyState[] {
   const activeSet = new Set(activeSectionKeys);
   const visible: EnemyState[] = [];
 
   for (const enemy of enemies.values()) {
+    if (enemy.level !== level) {
+      continue;
+    }
     if (!enemy.isAlive) {
       continue;
     }
@@ -889,11 +1083,14 @@ function getVisibleEnemies(activeSectionKeys: string[]): EnemyState[] {
   return visible;
 }
 
-function getVisibleBosses(activeSectionKeys: string[]): BossState[] {
+function getVisibleBosses(level: LevelId, activeSectionKeys: string[]): BossState[] {
   const activeSet = new Set(activeSectionKeys);
   const visible: BossState[] = [];
 
   for (const boss of bosses.values()) {
+    if (boss.level !== level) {
+      continue;
+    }
     if (!boss.isAlive) {
       continue;
     }
@@ -906,11 +1103,14 @@ function getVisibleBosses(activeSectionKeys: string[]): BossState[] {
   return visible;
 }
 
-function getVisibleChests(activeSectionKeys: string[]): ChestState[] {
+function getVisibleChests(level: LevelId, activeSectionKeys: string[]): ChestState[] {
   const activeSet = new Set(activeSectionKeys);
   const visible: ChestState[] = [];
 
   for (const chest of chests.values()) {
+    if (chest.level !== level) {
+      continue;
+    }
     if (chest.isOpened) {
       continue;
     }
@@ -923,11 +1123,14 @@ function getVisibleChests(activeSectionKeys: string[]): ChestState[] {
   return visible;
 }
 
-function getVisibleShops(activeSectionKeys: string[]): ShopState[] {
+function getVisibleShops(level: LevelId, activeSectionKeys: string[]): ShopState[] {
   const activeSet = new Set(activeSectionKeys);
   const visible: ShopState[] = [];
 
   for (const shop of shops.values()) {
+    if (shop.level !== level) {
+      continue;
+    }
     if (!activeSet.has(shop.sectionKey)) {
       continue;
     }
@@ -1006,11 +1209,13 @@ function removePlayerFromGroup(username: string): void {
 
 function buildWorldState(username: string): {
   player: PlayerState;
+  level: LevelId;
   activeSections: string[];
   enemies: EnemyState[];
   bosses: BossState[];
   chests: ChestState[];
   shops: ShopState[];
+  portals: PortalState[];
   inventory: InventoryState;
   group: GroupState | null;
   shieldActive: boolean;
@@ -1021,11 +1226,13 @@ function buildWorldState(username: string): {
   const shieldRemainingMs = Math.max(0, player.shieldUntilMs - Date.now());
   return {
     player,
+    level: player.level,
     activeSections,
-    enemies: getVisibleEnemies(activeSections),
-    bosses: getVisibleBosses(activeSections),
-    chests: getVisibleChests(activeSections),
-    shops: getVisibleShops(activeSections),
+    enemies: getVisibleEnemies(player.level, activeSections),
+    bosses: getVisibleBosses(player.level, activeSections),
+    chests: getVisibleChests(player.level, activeSections),
+    shops: getVisibleShops(player.level, activeSections),
+    portals: Array.from(portals.values()).filter((p) => p.level === player.level),
     inventory: toInventoryState(player),
     group: getGroupForPlayer(username),
     shieldActive: shieldRemainingMs > 0,
@@ -1038,22 +1245,25 @@ function respawnEnemy(enemyId: string): void {
   if (!enemy) {
     return;
   }
-  const section = sections.get(enemy.sectionKey);
+  const section = getSectionsForLevel(enemy.level).get(enemy.sectionKey);
   if (!section) {
     return;
   }
 
   let candidate = {
-    x: clamp(section.center.x + (Math.random() - 0.5) * (SECTION_SIZE * 0.6), -WORLD_LIMIT, WORLD_LIMIT),
-    y: clamp(section.center.y + (Math.random() - 0.5) * (SECTION_SIZE * 0.6), -WORLD_LIMIT, WORLD_LIMIT)
+    x: clamp(section.center.x + (Math.random() - 0.5) * (SECTION_SIZE * 0.6), -LEVEL_WORLD_LIMIT[enemy.level], LEVEL_WORLD_LIMIT[enemy.level]),
+    y: clamp(section.center.y + (Math.random() - 0.5) * (SECTION_SIZE * 0.6), -LEVEL_WORLD_LIMIT[enemy.level], LEVEL_WORLD_LIMIT[enemy.level])
   };
   for (let i = 0; i < SPAWN_RESOLVE_TRIES; i += 1) {
-    if (!overlapsStructure(candidate) && !overlapsEntities(candidate, ENTITY_COLLISION_RADIUS, enemy.id)) {
+    if (
+      !overlapsStructureOnLevel(enemy.level, candidate) &&
+      !overlapsEntitiesOnLevel(enemy.level, candidate, ENTITY_COLLISION_RADIUS, enemy.id)
+    ) {
       break;
     }
     candidate = {
-      x: clamp(section.center.x + (Math.random() - 0.5) * (SECTION_SIZE * 0.6), -WORLD_LIMIT, WORLD_LIMIT),
-      y: clamp(section.center.y + (Math.random() - 0.5) * (SECTION_SIZE * 0.6), -WORLD_LIMIT, WORLD_LIMIT)
+      x: clamp(section.center.x + (Math.random() - 0.5) * (SECTION_SIZE * 0.6), -LEVEL_WORLD_LIMIT[enemy.level], LEVEL_WORLD_LIMIT[enemy.level]),
+      y: clamp(section.center.y + (Math.random() - 0.5) * (SECTION_SIZE * 0.6), -LEVEL_WORLD_LIMIT[enemy.level], LEVEL_WORLD_LIMIT[enemy.level])
     };
   }
   enemy.x = candidate.x;
@@ -1071,20 +1281,20 @@ function respawnBoss(bossId: string): void {
 
   boss.x = boss.spawnX;
   boss.y = boss.spawnY;
-  boss.sectionKey = getSectionKeyForPosition(boss.x, boss.y);
+  boss.sectionKey = getSectionKeyForPositionOnLevel(boss.level, boss.x, boss.y);
   boss.health = boss.maxHealth;
   boss.isAlive = true;
   boss.nextSpawnEligibleAtMs = 0;
 }
 
 function tickActiveEnemies(): void {
-  const activeSections = getGlobalActiveSectionKeys();
-  if (activeSections.size === 0) {
-    return;
-  }
   const now = Date.now();
 
   for (const enemy of enemies.values()) {
+    const activeSections = getGlobalActiveSectionKeys(enemy.level);
+    if (activeSections.size === 0) {
+      continue;
+    }
     if (!enemy.isAlive) {
       continue;
     }
@@ -1092,7 +1302,7 @@ function tickActiveEnemies(): void {
       continue;
     }
 
-    const nearestPlayer = getNearestEnemyTargetPlayer({ x: enemy.x, y: enemy.y }, ENEMY_AGGRO_RANGE);
+    const nearestPlayer = getNearestEnemyTargetPlayer(enemy.level, { x: enemy.x, y: enemy.y }, ENEMY_AGGRO_RANGE);
     if (!nearestPlayer) {
       continue;
     }
@@ -1109,9 +1319,9 @@ function tickActiveEnemies(): void {
       );
       const distanceAfterMove = distance(nextPos, playerPos);
       if (!(isShieldActive(nearestPlayer) && distanceAfterMove <= SHIELD_BLOCK_RADIUS)) {
-        enemy.x = clamp(nextPos.x, -WORLD_LIMIT, WORLD_LIMIT);
-        enemy.y = clamp(nextPos.y, -WORLD_LIMIT, WORLD_LIMIT);
-        enemy.sectionKey = getSectionKeyForPosition(enemy.x, enemy.y);
+        enemy.x = clamp(nextPos.x, -LEVEL_WORLD_LIMIT[enemy.level], LEVEL_WORLD_LIMIT[enemy.level]);
+        enemy.y = clamp(nextPos.y, -LEVEL_WORLD_LIMIT[enemy.level], LEVEL_WORLD_LIMIT[enemy.level]);
+        enemy.sectionKey = getSectionKeyForPositionOnLevel(enemy.level, enemy.x, enemy.y);
       }
     }
 
@@ -1130,7 +1340,6 @@ function tickActiveEnemies(): void {
 }
 
 function tickActiveBosses(): void {
-  const activeSections = getGlobalActiveSectionKeys();
   const now = Date.now();
 
   // Bosses only materialize when a player gets close to the pillar-center spawn point.
@@ -1142,7 +1351,7 @@ function tickActiveBosses(): void {
       continue;
     }
 
-    const nearestToSpawn = getNearestPlayer({ x: boss.spawnX, y: boss.spawnY }, BOSS_PILLAR_SPAWN_RANGE);
+    const nearestToSpawn = getNearestPlayerOnLevel(boss.level, { x: boss.spawnX, y: boss.spawnY }, BOSS_PILLAR_SPAWN_RANGE);
     if (!nearestToSpawn) {
       continue;
     }
@@ -1150,11 +1359,11 @@ function tickActiveBosses(): void {
     respawnBoss(boss.id);
   }
 
-  if (activeSections.size === 0) {
-    return;
-  }
-
   for (const boss of bosses.values()) {
+    const activeSections = getGlobalActiveSectionKeys(boss.level);
+    if (activeSections.size === 0) {
+      continue;
+    }
     if (!boss.isAlive) {
       continue;
     }
@@ -1162,7 +1371,7 @@ function tickActiveBosses(): void {
       continue;
     }
 
-    const nearestPlayer = getNearestPlayer({ x: boss.x, y: boss.y }, WORLD_LIMIT * 2);
+    const nearestPlayer = getNearestPlayerOnLevel(boss.level, { x: boss.x, y: boss.y }, WORLD_LIMIT * 2);
     if (!nearestPlayer) {
       continue;
     }
@@ -1177,10 +1386,10 @@ function tickActiveBosses(): void {
     );
     const distanceAfterMove = distance(nextPos, playerPos);
     if (!(isShieldActive(nearestPlayer) && distanceAfterMove <= SHIELD_BLOCK_RADIUS)) {
-      boss.x = clamp(nextPos.x, -WORLD_LIMIT, WORLD_LIMIT);
-      boss.y = clamp(nextPos.y, -WORLD_LIMIT, WORLD_LIMIT);
+      boss.x = clamp(nextPos.x, -LEVEL_WORLD_LIMIT[boss.level], LEVEL_WORLD_LIMIT[boss.level]);
+      boss.y = clamp(nextPos.y, -LEVEL_WORLD_LIMIT[boss.level], LEVEL_WORLD_LIMIT[boss.level]);
     }
-    boss.sectionKey = getSectionKeyForPosition(boss.x, boss.y);
+    boss.sectionKey = getSectionKeyForPositionOnLevel(boss.level, boss.x, boss.y);
 
     const attackDistance = distance({ x: boss.x, y: boss.y }, playerPos);
     if (attackDistance <= BOSS_ATTACK_CONTACT_RANGE && !(isShieldActive(nearestPlayer) && attackDistance <= SHIELD_BLOCK_RADIUS)) {
@@ -1205,7 +1414,79 @@ function tickChestRespawns(): void {
   }
 }
 
+function processPlayerPortalTransitions(): void {
+  for (const player of players.values()) {
+    if (player.isDead || !isPlayerActive(player)) {
+      continue;
+    }
+
+    for (const portal of portals.values()) {
+      if (portal.level !== player.level) {
+        continue;
+      }
+
+      if (distance({ x: player.x, y: player.y }, { x: portal.x, y: portal.y }) <= PORTAL_TRIGGER_RANGE) {
+        player.level = portal.targetLevel;
+        const safeSpot = findNearestSafePortalExit(
+          { x: portal.targetX, y: portal.targetY },
+          player.username,
+          player.level
+        );
+        player.x = safeSpot?.x ?? portal.targetX;
+        player.y = safeSpot?.y ?? portal.targetY;
+        break;
+      }
+    }
+  }
+}
+
+function findNearestSafePortalExit(start: Vec2, username: string, level: LevelId): Vec2 | null {
+  const limit = LEVEL_WORLD_LIMIT[level];
+  const origin = {
+    x: clamp(start.x, -limit, limit),
+    y: clamp(start.y, -limit, limit)
+  };
+  const minPortalClearance = PORTAL_TRIGGER_RANGE + 6;
+
+  const isNearPortal = (pos: Vec2): boolean => {
+    for (const portal of portals.values()) {
+      if (portal.level !== level) {
+        continue;
+      }
+      if (distance(pos, { x: portal.x, y: portal.y }) <= minPortalClearance) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  if (!isNearPortal(origin) && !isBlockedForPlayer(origin, username, level)) {
+    return origin;
+  }
+
+  const directions = 16;
+  for (let ring = 1; ring <= 20; ring += 1) {
+    const radius = ring * 6;
+    for (let i = 0; i < directions; i += 1) {
+      const angle = (i / directions) * Math.PI * 2;
+      const candidate = {
+        x: clamp(origin.x + Math.cos(angle) * radius, -limit, limit),
+        y: clamp(origin.y + Math.sin(angle) * radius, -limit, limit)
+      };
+      if (isNearPortal(candidate)) {
+        continue;
+      }
+      if (!isBlockedForPlayer(candidate, username, level)) {
+        return candidate;
+      }
+    }
+  }
+
+  return null;
+}
+
 setInterval(() => {
+  processPlayerPortalTransitions();
   tickActiveEnemies();
   tickActiveBosses();
   tickChestRespawns();
@@ -1384,12 +1665,15 @@ app.post("/api/world/join", requireAuth, (req: AuthRequest, res: Response) => {
   }
 
   const player = getOrCreatePlayer(username);
+  const requestedLevelRaw = String(req.body?.level ?? "").toLowerCase();
+  const requestedLevel: LevelId = requestedLevelRaw === "cave" ? "cave" : "surface";
+  player.level = requestedLevel;
   const requestedX = Number(req.body?.x);
   const requestedY = Number(req.body?.y);
   const joinTarget: Vec2 = Number.isFinite(requestedX) && Number.isFinite(requestedY)
     ? { x: requestedX, y: requestedY }
     : { x: player.x, y: player.y };
-  const safeJoin = findNearestOpenPlayerPosition(joinTarget, username);
+  const safeJoin = findNearestOpenPlayerPosition(joinTarget, username, player.level);
   if (!safeJoin) {
     res.status(400).json({ error: "No free spot available near that join point." });
     return;
@@ -1451,11 +1735,11 @@ app.post("/api/world/move", requireAuth, (req: AuthRequest, res: Response) => {
   }
 
   const target = {
-    x: clamp(nextX, -WORLD_LIMIT, WORLD_LIMIT),
-    y: clamp(nextY, -WORLD_LIMIT, WORLD_LIMIT)
+    x: clamp(nextX, -LEVEL_WORLD_LIMIT[player.level], LEVEL_WORLD_LIMIT[player.level]),
+    y: clamp(nextY, -LEVEL_WORLD_LIMIT[player.level], LEVEL_WORLD_LIMIT[player.level])
   };
 
-  if (isBlockedForPlayer(target, username)) {
+  if (isBlockedForPlayer(target, username, player.level)) {
     res.json({
       message: "Move blocked by an entity or structure.",
       blocked: true,
@@ -1687,6 +1971,10 @@ app.post("/api/shops/buy", requireAuth, (req: AuthRequest, res: Response) => {
   }
 
   const player = getOrCreatePlayer(username);
+  if (player.level !== shop.level) {
+    res.status(400).json({ error: "Shop is not in your current level." });
+    return;
+  }
   if (player.isDead) {
     res.status(400).json({ error: "You died. Press space to play again." });
     return;
@@ -1762,6 +2050,10 @@ app.post("/api/chests/open", requireAuth, (req: AuthRequest, res: Response) => {
   }
 
   const player = getOrCreatePlayer(username);
+  if (player.level !== chest.level) {
+    res.status(400).json({ error: "Chest is not in your current level." });
+    return;
+  }
   if (player.isDead) {
     res.status(400).json({ error: "You died. Press space to play again." });
     return;
@@ -1836,6 +2128,10 @@ app.post("/api/combat/attack", requireAuth, (req: AuthRequest, res: Response) =>
     res.status(404).json({ error: "Enemy not found or already defeated" });
     return;
   }
+  if (enemy.level !== player.level) {
+    res.status(400).json({ error: "Enemy is in a different level." });
+    return;
+  }
 
   const range = distance({ x: player.x, y: player.y }, { x: enemy.x, y: enemy.y });
   if (range > ATTACK_RANGE) {
@@ -1908,6 +2204,10 @@ app.post("/api/combat/attack-boss", requireAuth, (req: AuthRequest, res: Respons
   const boss = bosses.get(bossId);
   if (!boss || !boss.isAlive) {
     res.status(404).json({ error: "Boss not found or already defeated" });
+    return;
+  }
+  if (boss.level !== player.level) {
+    res.status(400).json({ error: "Boss is in a different level." });
     return;
   }
 
